@@ -1,16 +1,14 @@
 require('dotenv').config();
-const fs   = require('fs');
-const path = require('path');
 const express    = require('express');
 const cors       = require('cors');
+const path       = require('path');
 const ccxt       = require('ccxt');
 const { ALL_PAIRS, TIER1, getPrioritizedPairs, boostPair } = require('./pairs');
 const { processAlerts, sendStartupMessage }                 = require('./telegram');
 const autoScanner                                           = require('./autoScanner');
 
 const app  = express();
-const PORT    = process.env.PORT || 3000;
-const APP_URL = process.env.APP_URL || 'https://arbiscan-f4fk.onrender.com';
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
@@ -263,133 +261,19 @@ app.post('/api/alert/test', async (req, res) => {
   res.json({ success: ok, message: ok ? 'Message envoyé !' : 'Échec — vérifiez TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID' });
 });
 
-// ── PERSISTANCE CONFIG BOT ────────────────────────────────────────────────────
-const BOT_CONFIG_FILE = path.join(__dirname, '..', 'bot_config.json');
-
-// Sauvegarder la config bot dans un fichier JSON
-function saveBotConfig(config) {
-  try {
-    // Ne pas sauvegarder les clés API en clair si mode production
-    // On sauvegarde uniquement la config structurelle
-    const toSave = {
-      pair:         config.pair,
-      exchange1:    config.exchange1,
-      exchange2:    config.exchange2,
-      okxCapital:   config.okxCapital,
-      htxCapital:   config.htxCapital,
-      minSpreadPct: config.minSpreadPct,
-      dryRun:       config.dryRun,
-      // Clés API chiffrées simplement (base64) — pas de vrai chiffrement
-      // mais évite l'exposition en clair dans les logs
-      apiConfigs: config.apiConfigs ? encodeAPIs(config.apiConfigs) : null,
-      savedAt: new Date().toISOString(),
-      autoRestart: true,
-    };
-    fs.writeFileSync(BOT_CONFIG_FILE, JSON.stringify(toSave, null, 2));
-    console.log('💾 Config bot sauvegardée');
-  } catch(e) {
-    console.error('Erreur sauvegarde config bot:', e.message);
-  }
-}
-
-// Charger la config bot depuis le fichier
-function loadBotConfig() {
-  try {
-    if (!fs.existsSync(BOT_CONFIG_FILE)) return null;
-    const raw = fs.readFileSync(BOT_CONFIG_FILE, 'utf8');
-    const cfg = JSON.parse(raw);
-    // Décoder les clés API
-    if (cfg.apiConfigs) cfg.apiConfigs = decodeAPIs(cfg.apiConfigs);
-    console.log('📂 Config bot restaurée:', cfg.pair, cfg.exchange1, '↔', cfg.exchange2);
-    return cfg;
-  } catch(e) {
-    console.error('Erreur chargement config bot:', e.message);
-    return null;
-  }
-}
-
-// Supprimer la config sauvegardée (quand l'utilisateur arrête le bot)
-function clearBotConfig() {
-  try {
-    if (fs.existsSync(BOT_CONFIG_FILE)) {
-      fs.unlinkSync(BOT_CONFIG_FILE);
-      console.log('🗑 Config bot supprimée');
-    }
-  } catch(e) {}
-}
-
-// Encodage/décodage simple des clés API (base64)
-function encodeAPIs(apiConfigs) {
-  const encoded = {};
-  for (const [id, cfg] of Object.entries(apiConfigs)) {
-    encoded[id] = {
-      apiKey:     Buffer.from(cfg.apiKey     || '').toString('base64'),
-      secret:     Buffer.from(cfg.secret     || '').toString('base64'),
-      passphrase: Buffer.from(cfg.passphrase || '').toString('base64'),
-    };
-  }
-  return encoded;
-}
-
-function decodeAPIs(encoded) {
-  const decoded = {};
-  for (const [id, cfg] of Object.entries(encoded)) {
-    decoded[id] = {
-      apiKey:     Buffer.from(cfg.apiKey     || '', 'base64').toString('utf8'),
-      secret:     Buffer.from(cfg.secret     || '', 'base64').toString('utf8'),
-      passphrase: Buffer.from(cfg.passphrase || '', 'base64').toString('utf8'),
-    };
-  }
-  return decoded;
-}
-
 // ── DÉMARRAGE ─────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
   console.log(`\n🟢 ArbiScan running → http://localhost:${PORT}`);
   console.log(`   Exchanges    : ${EXCHANGE_IDS.length} exchanges`);
   console.log(`   Paires total : ${ALL_PAIRS.length} paires`);
 
-  // Initialiser et démarrer le scanner automatique de signaux
+  // Initialiser et démarrer le scanner automatique
   autoScanner.init(getPrices, findArbitrageOpportunities, EXCHANGE_IDS);
   autoScanner.start();
-
-  // ── REDÉMARRAGE AUTOMATIQUE DU BOT ────────────────────────────────────────
-  // Si une config bot est sauvegardée (= l'utilisateur avait démarré le bot
-  // avant le redémarrage du serveur), on le relance automatiquement
-  const savedConfig = loadBotConfig();
-  if (savedConfig && savedConfig.autoRestart) {
-    console.log('🔄 Redémarrage automatique du bot...');
-    try {
-      await tradeBot.start(savedConfig);
-      console.log(`✅ Bot relancé automatiquement sur ${savedConfig.pair}`);
-
-      // Notifier sur Telegram que le bot a été relancé
-      const { sendTelegram } = require('./telegram');
-      await sendTelegram(`🔄 *ArbiScan Bot — Redémarrage automatique*
-
-Le serveur a redémarré et le bot a été relancé automatiquement.
-
-💎 *Paire :* ${savedConfig.pair}
-🏦 *Exchanges :* ${savedConfig.exchange1?.toUpperCase()} ↔ ${savedConfig.exchange2?.toUpperCase()}
-🤖 *Mode :* ${savedConfig.dryRun ? '🧪 Simulation' : '💰 Production'}
-
-_Le bot continue de fonctionner en arrière-plan._`);
-
-    } catch(e) {
-      console.error('❌ Échec redémarrage automatique:', e.message);
-      clearBotConfig(); // Config invalide, on l'efface
-    }
-  } else {
-    console.log('ℹ Bot non configuré — en attente de démarrage via le site');
-  }
 
   // Message de démarrage Telegram
   if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
     await sendStartupMessage();
-    // Configurer le webhook Telegram pour recevoir les commandes
-    await tgCommander.setupWebhook(APP_URL);
-    // Activer le keep-alive automatiquement au démarrage
-    tgCommander.startKeepAlive(process.env.TELEGRAM_CHAT_ID);
   }
 });
 
@@ -545,8 +429,7 @@ app.get('/api/admin/subscribers', async (req, res) => {
 });
 
 // ── ROUTES BOT D'EXÉCUTION ────────────────────────────────────────────────────
-const tradeBot    = require('./tradeBot');
-const tgCommander = require('./telegramBot');
+const tradeBot = require('./tradeBot');
 
 // Démarrer le bot automatiquement si les clés API sont configurées
 if (process.env.OKX_API_KEY && process.env.HTX_API_KEY) {
@@ -585,9 +468,8 @@ app.post('/api/bot/start', async (req, res) => {
 // POST /api/bot/stop — arrêter le bot
 app.post('/api/bot/stop', (req, res) => {
   const { adminKey } = req.body;
-  if (adminKey !== process.env.ADMIN_KEY && adminKey !== BOT_PUBLIC_KEY) return res.status(403).json({ error: 'Clé invalide' });
+  if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Accès refusé' });
   tradeBot.stop();
-  clearBotConfig(); // Supprimer la config — pas de redémarrage automatique
   res.json({ success: true, message: 'Bot arrêté' });
 });
 
@@ -616,7 +498,7 @@ app.get('/api/bot/balances', async (req, res) => {
 // POST /api/bot/report — envoyer rapport hebdomadaire manuellement
 app.post('/api/bot/report', async (req, res) => {
   const { adminKey } = req.body;
-  if (adminKey !== process.env.ADMIN_KEY && adminKey !== BOT_PUBLIC_KEY) return res.status(403).json({ error: 'Clé invalide' });
+  if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Accès refusé' });
   await tradeBot.sendWeeklyReport();
   res.json({ success: true });
 });
@@ -708,35 +590,9 @@ function requireAdminToken(req, res, next) {
 }
 
 // ── ROUTE TEST CONNEXIONS EXCHANGES ──────────────────────────────────────────
-
-// ── WEBHOOK TELEGRAM — COMMANDES BOT ─────────────────────────────────────────
-app.post('/telegram-webhook', async (req, res) => {
-  res.sendStatus(200);
-  await tgCommander.processUpdate(req.body, tradeBot, loadBotConfig, saveBotConfig);
-});
-
-// POST /api/bot/keepalive — activer/désactiver le ping keep-alive
-app.post('/api/bot/keepalive', (req, res) => {
-  const { action, adminKey } = req.body;
-  const validKey = adminKey === process.env.ADMIN_KEY || adminKey === BOT_PUBLIC_KEY;
-  if (!validKey) return res.status(403).json({ error: 'Clé invalide' });
-  if (action === 'on') {
-    tgCommander.startKeepAlive(process.env.TELEGRAM_CHAT_ID);
-    res.json({ success: true, message: '✅ Keep-alive activé (ping toutes les 13 min)' });
-  } else {
-    tgCommander.stopKeepAlive();
-    res.json({ success: true, message: '⏹ Keep-alive désactivé' });
-  }
-});
-
-// GET /api/bot/keepalive — statut
-app.get('/api/bot/keepalive', (req, res) => {
-  res.json({ active: tgCommander.isKeepAliveActive() });
-});
-
 app.post('/api/bot/test-connections', async (req, res) => {
   const { adminKey, exchanges: exIds, apiConfigs } = req.body;
-  if (adminKey !== process.env.ADMIN_KEY && adminKey !== BOT_PUBLIC_KEY) return res.status(403).json({ error: 'Clé invalide' });
+  if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Accès refusé' });
 
   const ccxt    = require('ccxt');
   const results = {};
