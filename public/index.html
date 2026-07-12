@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ArbiScan — Signaux d'Arbitrage Crypto</title>
+<title>ArbiScan — Bot de Trading</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#0A0E1A;--surface:#111827;--card:#0F1929;--border:#1E2D40;
   --green:#00F5A0;--orange:#FF6B35;--blue:#3B82F6;--yellow:#F59E0B;
-  --purple:#A855F7;--muted:#8892A4;--text:#E2E8F0;
+  --muted:#8892A4;--text:#E2E8F0;
   --mono:'JetBrains Mono',monospace;--sans:'Inter',sans-serif;
 }
 body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;overflow-x:hidden}
@@ -20,49 +20,14 @@ header{display:flex;align-items:center;justify-content:space-between;padding:13p
 .logo{font-family:var(--mono);font-size:.95rem;font-weight:700;color:var(--green);display:flex;align-items:center;gap:8px;text-decoration:none;flex-shrink:0}
 .logo-dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pdot 2s infinite}
 @keyframes pdot{0%,100%{opacity:1}50%{opacity:.3}}
-.header-right{display:flex;align-items:center;gap:10px}
-.hstats{display:flex;gap:16px}
 .hstat{display:flex;flex-direction:column;align-items:flex-end}
 .hstat-lbl{font-family:var(--mono);font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
 .hstat-val{font-family:var(--mono);font-size:.8rem;font-weight:700;color:var(--green)}
 .sdot{width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block;margin-right:4px}
 .sdot.live{background:var(--green);animation:pdot 1.5s infinite}
 
-/* ── TICKER ── */
-.ticker-bar{border-bottom:1px solid var(--border);padding:7px 0;overflow:hidden;background:var(--surface)}
-.ticker-track{display:flex;gap:36px;animation:ticker 35s linear infinite;width:max-content}
-@keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
-.tick{font-family:var(--mono);font-size:.68rem;color:var(--muted);display:flex;gap:5px;white-space:nowrap}
-.tick-sym{color:var(--text);font-weight:500}
-.up{color:var(--green)}.dn{color:var(--orange)}
-
-/* ── LAYOUT ── */
-.app{display:grid;grid-template-columns:240px 1fr;min-height:calc(100vh - 86px)}
-
-/* ── SIDEBAR ── */
-.sidebar{border-right:1px solid var(--border);padding:16px 14px;display:flex;flex-direction:column;gap:14px;position:sticky;top:86px;height:calc(100vh - 86px);overflow-y:auto}
-.sb-title{font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.14em;margin-bottom:3px}
-label{font-size:.78rem;color:var(--muted);display:flex;flex-direction:column;gap:4px}
-select,input[type=number]{font-family:var(--mono);font-size:.76rem;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;outline:none;width:100%}
-select:focus,input:focus{border-color:var(--green)}
-input[type=range]{width:100%;cursor:pointer;accent-color:var(--green)}
-.ex-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
-.ex-btn{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:.65rem;color:var(--muted);background:var(--card);border:1px solid var(--border);border-radius:5px;padding:5px 7px;cursor:pointer;transition:all .2s;user-select:none}
-.ex-btn.on{border-color:var(--green);color:var(--green);background:rgba(0,245,160,.06)}
-.ex-dot{width:5px;height:5px;border-radius:50%;background:var(--border);flex-shrink:0}
-.ex-btn.on .ex-dot{background:var(--green)}
-.btn-run{width:100%;padding:11px;border:none;border-radius:7px;background:var(--green);color:#0A0E1A;font-family:var(--mono);font-size:.82rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity .2s}
-.btn-run:hover{opacity:.88}
-.btn-run:disabled{opacity:.4;cursor:not-allowed}
-.btn-full{width:100%;padding:9px;border:1px solid var(--green);border-radius:7px;background:transparent;color:var(--green);font-family:var(--mono);font-size:.76rem;font-weight:600;cursor:pointer;transition:background .2s}
-.btn-full:hover{background:rgba(0,245,160,.07)}
-.spin{width:13px;height:13px;border:2px solid rgba(0,0,0,.2);border-top-color:#0A0E1A;border-radius:50%;animation:spin .7s linear infinite;display:none}
-@keyframes spin{to{transform:rotate(360deg)}}
-.btn-run.loading .spin{display:block}
-.btn-run.loading .btn-ico{display:none}
-
 /* ── MAIN ── */
-.main{padding:18px 22px;display:flex;flex-direction:column;gap:14px}
+.main{max-width:900px;margin:0 auto;padding:22px 18px;display:flex;flex-direction:column;gap:14px}
 
 /* ── STAT CARDS ── */
 .stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
@@ -75,87 +40,11 @@ input[type=range]{width:100%;cursor:pointer;accent-color:var(--green)}
 .stitle{font-family:var(--mono);font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.14em;display:flex;align-items:center;gap:10px;margin-bottom:10px}
 .stitle::after{content:'';flex:1;height:1px;background:var(--border)}
 
-/* ── SIGNAL CARDS ── */
-.sigs{display:flex;flex-direction:column;gap:8px}
-.sig{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:13px 15px;display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;animation:si .3s ease both;transition:border-color .2s}
-.sig:hover{border-color:rgba(0,245,160,.3)}
-@keyframes si{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.badge{font-family:var(--mono);font-size:.58rem;font-weight:700;padding:3px 7px;border-radius:4px;letter-spacing:.07em;white-space:nowrap;align-self:flex-start}
-.bl{background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.25)}
-.bm{background:rgba(245,158,11,.12);color:var(--yellow);border:1px solid rgba(245,158,11,.25)}
-.bh{background:rgba(255,107,53,.12);color:var(--orange);border:1px solid rgba(255,107,53,.25)}
-.sig-pair{font-family:var(--mono);font-weight:700;font-size:.88rem;margin-bottom:3px}
-.sig-route{font-family:var(--mono);font-size:.67rem;color:var(--muted)}
-.sig-route .ex{color:var(--text)}.sig-route .arr{color:var(--green)}
-.sig-prices{text-align:right}
-.sig-buy{font-family:var(--mono);font-size:.67rem;color:var(--orange)}
-.sig-sell{font-family:var(--mono);font-size:.67rem;color:var(--green)}
-.sig-prf{text-align:right;min-width:82px}
-.sig-pct{font-family:var(--mono);font-weight:700;font-size:.95rem;color:var(--green)}
-.sig-net{font-family:var(--mono);font-size:.65rem;color:var(--muted)}
-.cbar{width:100%;height:3px;background:var(--border);border-radius:2px;margin-top:5px}
-.cfill{height:100%;border-radius:2px;background:var(--green)}
-
-/* ── EMPTY / ERROR / SKELETON ── */
+/* ── EMPTY ── */
 .empty{padding:40px 16px;text-align:center;font-family:var(--mono);font-size:.76rem;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:10px}
 .ei{font-size:2rem;opacity:.2}
-.ebox{background:rgba(255,107,53,.08);border:1px solid rgba(255,107,53,.25);border-radius:8px;padding:12px 15px;font-family:var(--mono);font-size:.75rem;color:var(--orange)}
-.skel{background:linear-gradient(90deg,var(--surface) 25%,var(--card) 50%,var(--surface) 75%);background-size:200% 100%;animation:shim 1.5s infinite;border-radius:6px;height:66px}
-@keyframes shim{from{background-position:200% 0}to{background-position:-200% 0}}
 
-/* ── ALERTS PANEL ── */
-.abox{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px}
-.astats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
-.astat{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px}
-.astat-lbl{font-family:var(--mono);font-size:.57rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px}
-.astat-val{font-family:var(--mono);font-size:.88rem;font-weight:700;color:var(--green)}
-.steps{display:flex;flex-direction:column;gap:10px;margin-bottom:14px}
-.step{display:flex;gap:10px}
-.snum{width:22px;height:22px;border-radius:50%;background:rgba(0,245,160,.12);border:1px solid var(--green);color:var(--green);font-family:var(--mono);font-size:.68rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
-.stxt{font-size:.8rem;line-height:1.65;color:var(--text)}
-.stxt code{font-family:var(--mono);font-size:.72rem;background:var(--card);padding:2px 5px;border-radius:3px;color:var(--green);border:1px solid var(--border)}
-.btn-test{font-family:var(--mono);font-size:.76rem;background:var(--green);color:#0A0E1A;border:none;border-radius:6px;padding:10px;cursor:pointer;font-weight:700;width:100%;transition:opacity .2s}
-.btn-test:hover{opacity:.85}
-.alog{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px;font-family:var(--mono);font-size:.7rem;color:var(--muted);min-height:80px;max-height:180px;overflow-y:auto;line-height:1.8}
-.alog-line{display:flex;gap:8px}
-.lt{color:var(--muted);flex-shrink:0}
-.lok{color:var(--green)}.lerr{color:var(--orange)}.linf{color:var(--blue)}
-
-/* ── MOBILE DRAWER ── */
-.mob-bar{display:none;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border)}
-.mob-btn{font-family:var(--mono);font-size:.74rem;background:var(--card);color:var(--green);border:1px solid var(--border);border-radius:6px;padding:7px 14px;cursor:pointer}
-.mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200}
-.mob-overlay.open{display:block}
-.mob-drawer{position:fixed;top:0;left:0;bottom:0;width:270px;background:var(--bg);border-right:1px solid var(--border);z-index:201;transform:translateX(-100%);transition:transform .28s ease;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:14px}
-.mob-drawer.open{transform:translateX(0)}
-.mob-close{align-self:flex-end;background:none;border:none;color:var(--muted);font-size:1.1rem;cursor:pointer;padding:4px 8px}
-
-/* ── TABS (Signaux / Alertes) ── */
-.tabs{display:flex;border-bottom:1px solid var(--border);background:var(--surface);padding:0 22px}
-.tab{font-family:var(--mono);font-size:.72rem;color:var(--muted);padding:11px 14px;cursor:pointer;border-bottom:2px solid transparent;transition:color .2s,border-color .2s;white-space:nowrap;flex-shrink:0;user-select:none}
-.tab.active{color:var(--green);border-bottom-color:var(--green)}
-.panel{display:none;flex-direction:column;gap:14px}
-.panel.active{display:flex}
-
-/* ── RESPONSIVE ── */
-@media(max-width:900px){
-  .app{grid-template-columns:1fr}
-  .sidebar{display:none}
-  .mob-bar{display:block}
-  .stat-row{grid-template-columns:1fr 1fr}
-  .hstats .hstat:nth-child(n+3){display:none}
-}
-@media(max-width:560px){
-  header{padding:10px 12px}
-  .hstats .hstat:nth-child(n+2){display:none}
-  .main{padding:12px 10px}
-  .stat-row{grid-template-columns:1fr 1fr;gap:8px}
-  .sig{grid-template-columns:1fr 1fr;grid-template-rows:auto auto auto}
-  .sig .badge{grid-column:1}.sig .sig-prices{grid-column:2;justify-self:end}
-  .sig .sig-prf{grid-column:1/3;text-align:left}
-}
-
-footer{padding:12px 24px;border-top:1px solid var(--border);font-size:.67rem;color:var(--muted);text-align:center;display:flex;align-items:center;justify-content:center;gap:16px}
+/* ── EXCHANGE SELECT CARDS ── */
 .ex-sel-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 8px;cursor:pointer;text-align:center;transition:all .2s;user-select:none}
 .ex-sel-card:hover{border-color:rgba(0,245,160,.4);transform:translateY(-2px)}
 .ex-sel-card.selected{border-color:var(--green);background:rgba(0,245,160,.06)}
@@ -163,458 +52,180 @@ footer{padding:12px 24px;border-top:1px solid var(--border);font-size:.67rem;col
 .ex-sel-name{font-family:var(--mono);font-size:.72rem;font-weight:700;color:var(--text)}
 .ex-sel-check{font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:3px}
 .ex-sel-card.selected .ex-sel-check{color:var(--green)}
+
+/* ── STEP INDICATOR ── */
+.step-ind{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:.72rem;font-weight:700;border:1px solid var(--border);color:var(--muted);background:var(--card)}
+.step-ind.active{border-color:var(--green);color:var(--green);background:rgba(0,245,160,.08)}
+.step-ind.done{border-color:var(--green);color:#0A0E1A;background:var(--green)}
+.step-line{flex:1;height:1px;background:var(--border);margin:0 8px}
+.step-line.done{background:var(--green)}
+
+footer{padding:16px 24px;border-top:1px solid var(--border);font-size:.67rem;color:var(--muted);text-align:center}
+
+@media(max-width:560px){
+  header{padding:10px 12px}
+  .main{padding:14px 10px}
+  .stat-row{grid-template-columns:1fr 1fr;gap:8px}
+}
 </style>
 </head>
 <body>
 
 <!-- HEADER -->
 <header>
-  <a href="/" class="logo"><div class="logo-dot"></div>ARBISCAN</a>
-  <div class="hstats">
-    <div class="hstat"><span class="hstat-lbl">Status</span><span class="hstat-val"><span class="sdot" id="sdot"></span><span id="stxt">Hors ligne</span></span></div>
-    <div class="hstat"><span class="hstat-lbl">Exchanges</span><span class="hstat-val" id="hEx">—</span></div>
-    <div class="hstat"><span class="hstat-lbl">Signaux</span><span class="hstat-val" id="hSig">—</span></div>
-    <div class="hstat"><span class="hstat-lbl">Dernier scan</span><span class="hstat-val" id="hTime">—</span></div>
-  </div>
+  <a href="/" class="logo"><div class="logo-dot"></div>ARBISCAN · BOT</a>
+  <div class="hstat"><span class="hstat-lbl">Statut</span><span class="hstat-val"><span class="sdot" id="sdot"></span><span id="stxt">—</span></span></div>
 </header>
 
-<!-- TICKER -->
-<div class="ticker-bar"><div class="ticker-track" id="ticker"></div></div>
+<main class="main">
 
-<!-- MOBILE BAR -->
-<div class="mob-bar"><button class="mob-btn" onclick="openDrw()">☰ Paramètres</button></div>
+  <!-- STAT CARDS -->
+  <div class="stat-row">
+    <div class="scard"><div class="scard-lbl">Statut bot</div><div class="scard-val" id="botStatus">🔴 Arrêté</div><div class="scard-sub" id="botMode">—</div></div>
+    <div class="scard"><div class="scard-lbl">PnL Total</div><div class="scard-val" id="botPnL">0.0000</div><div class="scard-sub" id="botTradeCount">0 trades</div></div>
+    <div class="scard"><div class="scard-lbl">Exchange 1</div><div class="scard-val" id="ex1Bal">—</div><div class="scard-sub" id="ex1Name">—</div></div>
+    <div class="scard"><div class="scard-lbl">Exchange 2</div><div class="scard-val" id="ex2Bal">—</div><div class="scard-sub" id="ex2Name">—</div></div>
+  </div>
 
-<!-- TABS -->
-<div class="tabs">
-  <div class="tab active" id="tab-signals" onclick="goTab('signals')">⬡ Signaux</div>
-  <div class="tab" id="tab-alerts" onclick="goTab('alerts')">🔔 Alertes</div>
-  <div class="tab" id="tab-bot" onclick="goTab('bot')">🤖 Bot Trading</div>
-</div>
+  <!-- ÉTAPES -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px">
 
-<!-- LAYOUT -->
-<div class="app">
-  <aside class="sidebar" id="sidebarDesk" style="position:relative"></aside>
-  <main class="main">
-    <!-- STAT CARDS -->
-    <div class="stat-row">
-      <div class="scard"><div class="scard-lbl">Meilleur spread</div><div class="scard-val" id="sBs">—</div><div class="scard-sub" id="sBp">—</div></div>
-      <div class="scard"><div class="scard-lbl">Profit max</div><div class="scard-val" id="sBprf">—</div><div class="scard-sub" id="sBr">—</div></div>
-      <div class="scard"><div class="scard-lbl">Signaux</div><div class="scard-val" id="sTotal">—</div><div class="scard-sub" id="sTime">—</div></div>
-      <div class="scard"><div class="scard-lbl">Paires</div><div class="scard-val">6 101</div><div class="scard-sub">USDT uniquement</div></div>
-    </div>
-
-    <!-- PANEL SIGNAUX -->
-    <div class="panel active" id="panel-signals">
-      <div class="stitle">Opportunités d'arbitrage</div>
-      <div class="sigs" id="sigList"><div class="empty"><div class="ei">◎</div>Lancez un scan pour voir les opportunités.</div></div>
-    </div>
-
-    <!-- PANEL ALERTES -->
-    <div class="panel" id="panel-alerts">
-      <div class="abox">
-        <div class="stitle">Statut scanner automatique</div>
-        <div class="astats">
-          <div class="astat"><div class="astat-lbl">Scanner</div><div class="astat-val" id="asScan">—</div></div>
-          <div class="astat"><div class="astat-lbl">Telegram</div><div class="astat-val" id="asTg">—</div></div>
-          <div class="astat"><div class="astat-lbl">Dernier scan</div><div class="astat-val" id="asLast">—</div></div>
-          <div class="astat"><div class="astat-lbl">Seuil alerte</div><div class="astat-val" id="asThresh">—</div></div>
-        </div>
-        <div class="stitle">Derniers signaux auto</div>
-        <div id="asSignals" style="font-family:var(--mono);font-size:.74rem;color:var(--muted)">Chargement…</div>
+    <!-- INDICATEUR ÉTAPES -->
+    <div style="display:flex;align-items:center;gap:0;margin-bottom:20px">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+        <div class="step-ind active" id="sind1">1</div>
+        <div style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">Exchanges</div>
       </div>
-      <div class="abox">
-        <div class="stitle">Configuration Telegram</div>
-        <div class="steps">
-          <div class="step"><div class="snum">1</div><div class="stxt">Ouvre Telegram → <code>@BotFather</code> → <code>/newbot</code> → récupère ton token</div></div>
-          <div class="step"><div class="snum">2</div><div class="stxt">Dans Render → <b>Environment</b> → <code>TELEGRAM_BOT_TOKEN</code> · <code>TELEGRAM_CHAT_ID</code> · <code>ALERT_SPREAD=2.0</code></div></div>
-        </div>
-        <button class="btn-test" id="testBtn" onclick="testTg()">📨 Envoyer message de test</button>
-        <div id="testRes" style="margin-top:8px;font-family:var(--mono);font-size:.74rem;display:none"></div>
+      <div class="step-line" id="sline1"></div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+        <div class="step-ind todo" id="sind2">2</div>
+        <div style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">Connexion</div>
       </div>
-      <div class="abox">
-        <div class="stitle">Journal des alertes</div>
-        <div class="alog" id="alog"><div class="alog-line"><span class="lt">--:--:--</span><span class="linf">En attente…</span></div></div>
-      </div>
-    </div>
-  
-    <!-- PANEL BOT TRADING -->
-    <div class="panel" id="panel-bot" style="display:none;flex-direction:column;gap:14px">
-
-      <!-- STAT CARDS -->
-      <div class="stat-row">
-        <div class="scard"><div class="scard-lbl">Statut bot</div><div class="scard-val" id="botStatus">🔴 Arrêté</div><div class="scard-sub" id="botMode">—</div></div>
-        <div class="scard"><div class="scard-lbl">PnL Total</div><div class="scard-val" id="botPnL">0.0000</div><div class="scard-sub" id="botTradeCount">0 trades</div></div>
-        <div class="scard"><div class="scard-lbl">Exchange 1</div><div class="scard-val" id="ex1Bal">—</div><div class="scard-sub" id="ex1Name">—</div></div>
-        <div class="scard"><div class="scard-lbl">Exchange 2</div><div class="scard-val" id="ex2Bal">—</div><div class="scard-sub" id="ex2Name">—</div></div>
-      </div>
-
-      <!-- ÉTAPES -->
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px">
-
-        <!-- INDICATEUR ÉTAPES -->
-        <div style="display:flex;align-items:center;gap:0;margin-bottom:20px">
-          <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
-            <div class="step-ind active" id="sind1">1</div>
-            <div style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">Exchanges</div>
-          </div>
-          <div class="step-line" id="sline1"></div>
-          <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
-            <div class="step-ind todo" id="sind2">2</div>
-            <div style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">Connexion</div>
-          </div>
-          <div class="step-line" id="sline2"></div>
-          <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
-            <div class="step-ind todo" id="sind3">3</div>
-            <div style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">Configuration</div>
-          </div>
-        </div>
-
-        <!-- ÉTAPE 1 : CHOISIR LES EXCHANGES -->
-        <div id="botStep1">
-          <div class="stitle">Étape 1 — Choisir vos exchanges</div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px" id="exCardGrid"></div>
-          <div id="exSelMsg" style="font-family:var(--mono);font-size:.72rem;margin-bottom:10px"></div>
-          <button onclick="botGoStep2()" style="font-family:var(--mono);font-size:.8rem;font-weight:700;background:var(--green);color:#0A0E1A;border:none;border-radius:6px;padding:10px 20px;cursor:pointer">Continuer →</button>
-        </div>
-
-        <!-- ÉTAPE 2 : CLÉS API -->
-        <div id="botStep2" style="display:none">
-          <div class="stitle">Étape 2 — Clés API</div>
-          <div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);border-radius:7px;padding:10px 14px;font-family:var(--mono);font-size:.7rem;color:var(--yellow);margin-bottom:14px;line-height:1.8">
-            ⚠️ Créez vos clés API avec uniquement les droits <strong>Read + Trade</strong><br>
-            Ne jamais activer le droit <strong style="color:var(--orange)">Withdraw (Retrait)</strong>
-          </div>
-          <div id="apiFormsBot" style="display:flex;flex-direction:column;gap:12px"></div>
-          <div style="margin-top:14px">
-            <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">🔑 Clé admin (définie côté serveur dans .env)</div>
-            <input type="password" id="botAdminKey" placeholder="Clé admin" autocomplete="off"
-              oninput="localStorage.setItem('arbi_admin_key', this.value)"
-              style="font-family:var(--mono);font-size:.8rem;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px 12px;outline:none;width:100%">
-          </div>
-          <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
-            <button onclick="botGoStep1()" style="font-family:var(--mono);font-size:.76rem;background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:9px 14px;cursor:pointer">← Retour</button>
-            <button onclick="botTestConns()" id="testConnBotBtn" style="font-family:var(--mono);font-size:.8rem;font-weight:700;background:var(--green);color:#0A0E1A;border:none;border-radius:6px;padding:10px 18px;cursor:pointer">🔌 Tester les connexions</button>
-          </div>
-          <div id="connBotMsg" style="margin-top:10px;font-family:var(--mono);font-size:.73rem"></div>
-          <div id="connBotResults" style="display:flex;flex-direction:column;gap:8px;margin-top:10px"></div>
-        </div>
-
-        <!-- ÉTAPE 3 : CONFIG + LANCEMENT -->
-        <div id="botStep3" style="display:none">
-          <div class="stitle">Étape 3 — Configuration et lancement</div>
-
-          <!-- Exchanges connectés -->
-          <div id="connectedBadgesBot" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"></div>
-
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-            <!-- Paire de trading -->
-            <div style="grid-column:1/-1">
-              <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Paire de trading</div>
-              <input type="text" id="botPairInput" placeholder="ex: BTC/USDT · ETH/USDT · SOL/USDT"
-                oninput="this.value=this.value.toUpperCase().replace(' ','');botValidatePair()"
-                style="font-family:var(--mono);font-size:.84rem;background:var(--card);color:var(--green);border:1px solid var(--green);border-radius:6px;padding:10px 12px;outline:none;width:100%;font-weight:700">
-              <div id="botPairMsg" style="font-family:var(--mono);font-size:.68rem;margin-top:5px"></div>
-            </div>
-
-            <!-- Capital Exchange 1 -->
-            <div>
-              <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px" id="cap1Label">Capital Exchange 1 (USDT)</div>
-              <input type="number" id="botCap1" value="10" min="5" step="1"
-                oninput="updateBotCapTotal()"
-                style="font-family:var(--mono);font-size:.84rem;background:var(--card);color:var(--green);border:1px solid var(--border);border-radius:6px;padding:10px 12px;outline:none;width:100%;font-weight:700">
-            </div>
-
-            <!-- Capital Exchange 2 -->
-            <div>
-              <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px" id="cap2Label">Capital Exchange 2 (USDT)</div>
-              <input type="number" id="botCap2" value="10" min="5" step="1"
-                oninput="updateBotCapTotal()"
-                style="font-family:var(--mono);font-size:.84rem;background:var(--card);color:var(--green);border:1px solid var(--border);border-radius:6px;padding:10px 12px;outline:none;width:100%;font-weight:700">
-            </div>
-
-            <!-- Spread -->
-            <div>
-              <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Spread minimum</div>
-              <div style="display:flex;align-items:center;gap:8px">
-                <input type="range" id="botSpread" min="0.5" max="10" step="0.1" value="2.0"
-                  oninput="document.getElementById('botSpreadVal').textContent=parseFloat(this.value).toFixed(1)+'%'"
-                  style="flex:1;accent-color:var(--green);cursor:pointer">
-                <span id="botSpreadVal" style="font-family:var(--mono);font-size:.84rem;color:var(--green);font-weight:700;min-width:42px">2.0%</span>
-              </div>
-            </div>
-
-            <!-- Mode -->
-            <div>
-              <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Mode</div>
-              <select id="botDryRun"
-                style="font-family:var(--mono);font-size:.8rem;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 10px;outline:none;width:100%">
-                <option value="true">🧪 Simulation (recommandé)</option>
-                <option value="false">💰 Production (vrais trades)</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Info paire + total capital -->
-          <div id="botPairInfo" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:7px;padding:10px 14px;font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-bottom:12px;line-height:1.8"></div>
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
-            <span style="font-family:var(--mono);font-size:.72rem;color:var(--muted)">Capital total engagé</span>
-            <span style="font-family:var(--mono);font-size:.92rem;font-weight:700;color:var(--green)" id="botCapTotal">20 USDT</span>
-          </div>
-
-          <!-- Boutons -->
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <button onclick="botLaunch()" style="flex:1;font-family:var(--mono);font-size:.82rem;font-weight:700;background:var(--green);color:#0A0E1A;border:none;border-radius:6px;padding:11px 20px;cursor:pointer;min-width:140px">▶ Démarrer le bot</button>
-            <button onclick="botStop()" style="font-family:var(--mono);font-size:.8rem;font-weight:700;background:rgba(255,107,53,.15);color:var(--orange);border:1px solid rgba(255,107,53,.3);border-radius:6px;padding:11px 16px;cursor:pointer">⏹ Stop</button>
-            <button onclick="loadBotStatus()" style="font-family:var(--mono);font-size:.78rem;background:transparent;color:var(--green);border:1px solid var(--green);border-radius:6px;padding:11px 14px;cursor:pointer">↻</button>
-            <button onclick="botSendReport()" style="font-family:var(--mono);font-size:.78rem;background:transparent;color:var(--blue);border:1px solid var(--blue);border-radius:6px;padding:11px 14px;cursor:pointer">📊</button>
-            <button onclick="botGoStep1()" style="font-family:var(--mono);font-size:.76rem;background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:11px 14px;cursor:pointer">⚙ Reconfigurer</button>
-          </div>
-          <div id="botLaunchMsg" style="margin-top:10px;font-family:var(--mono);font-size:.74rem"></div>
-        </div>
-
-      </div>
-
-      <!-- HISTORIQUE DES TRADES -->
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px">
-        <div class="stitle">Historique des trades</div>
-        <div id="tradeHistoryList" style="display:flex;flex-direction:column;gap:8px">
-          <div class="empty"><div class="ei">◎</div>Aucun trade exécuté</div>
-        </div>
+      <div class="step-line" id="sline2"></div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+        <div class="step-ind todo" id="sind3">3</div>
+        <div style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">Configuration</div>
       </div>
     </div>
 
-  </main>
-</div>
+    <!-- ÉTAPE 1 : CHOISIR LES EXCHANGES -->
+    <div id="botStep1">
+      <div class="stitle">Étape 1 — Choisir vos 2 exchanges</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px" id="exCardGrid"></div>
+      <div id="exSelMsg" style="font-family:var(--mono);font-size:.72rem;margin-bottom:10px"></div>
+      <button onclick="botGoStep2()" style="font-family:var(--mono);font-size:.8rem;font-weight:700;background:var(--green);color:#0A0E1A;border:none;border-radius:6px;padding:10px 20px;cursor:pointer">Continuer →</button>
+    </div>
 
-<!-- MOBILE DRAWER -->
-<div class="mob-overlay" id="mobOverlay" onclick="closeDrw()"></div>
-<div class="mob-drawer" id="mobDrawer">
-  <button class="mob-close" onclick="closeDrw()">✕</button>
-  <div id="drawerContent"></div>
-</div>
+    <!-- ÉTAPE 2 : CLÉS API -->
+    <div id="botStep2" style="display:none">
+      <div class="stitle">Étape 2 — Clés API</div>
+      <div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);border-radius:7px;padding:10px 14px;font-family:var(--mono);font-size:.7rem;color:var(--yellow);margin-bottom:14px;line-height:1.8">
+        ⚠️ Créez vos clés API avec uniquement les droits <strong>Read + Trade</strong><br>
+        Ne jamais activer le droit <strong style="color:var(--orange)">Withdraw (Retrait)</strong>
+      </div>
+      <div id="apiFormsBot" style="display:flex;flex-direction:column;gap:12px"></div>
+      <div style="margin-top:14px">
+        <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">🔑 Clé admin (définie côté serveur dans .env)</div>
+        <input type="password" id="botAdminKey" placeholder="Clé admin" autocomplete="off"
+          oninput="localStorage.setItem('arbi_admin_key', this.value)"
+          style="font-family:var(--mono);font-size:.8rem;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px 12px;outline:none;width:100%">
+      </div>
+      <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+        <button onclick="botGoStep1()" style="font-family:var(--mono);font-size:.76rem;background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:9px 14px;cursor:pointer">← Retour</button>
+        <button onclick="botTestConns()" id="testConnBotBtn" style="font-family:var(--mono);font-size:.8rem;font-weight:700;background:var(--green);color:#0A0E1A;border:none;border-radius:6px;padding:10px 18px;cursor:pointer">🔌 Tester les connexions</button>
+      </div>
+      <div id="connBotMsg" style="margin-top:10px;font-family:var(--mono);font-size:.73rem"></div>
+      <div id="connBotResults" style="display:flex;flex-direction:column;gap:8px;margin-top:10px"></div>
+    </div>
+
+    <!-- ÉTAPE 3 : CONFIG + LANCEMENT -->
+    <div id="botStep3" style="display:none">
+      <div class="stitle">Étape 3 — Configuration et lancement</div>
+
+      <div id="connectedBadgesBot" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div style="grid-column:1/-1">
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Paire de trading</div>
+          <input type="text" id="botPairInput" placeholder="ex: BTC/USDT · ETH/USDT · SOL/USDT"
+            oninput="this.value=this.value.toUpperCase().replace(' ','');botValidatePair()"
+            style="font-family:var(--mono);font-size:.84rem;background:var(--card);color:var(--green);border:1px solid var(--green);border-radius:6px;padding:10px 12px;outline:none;width:100%;font-weight:700">
+          <div id="botPairMsg" style="font-family:var(--mono);font-size:.68rem;margin-top:5px"></div>
+        </div>
+
+        <div>
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px" id="cap1Label">Capital Exchange 1 (USDT)</div>
+          <input type="number" id="botCap1" value="10" min="5" step="1"
+            oninput="updateBotCapTotal()"
+            style="font-family:var(--mono);font-size:.84rem;background:var(--card);color:var(--green);border:1px solid var(--border);border-radius:6px;padding:10px 12px;outline:none;width:100%;font-weight:700">
+        </div>
+
+        <div>
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px" id="cap2Label">Capital Exchange 2 (USDT)</div>
+          <input type="number" id="botCap2" value="10" min="5" step="1"
+            oninput="updateBotCapTotal()"
+            style="font-family:var(--mono);font-size:.84rem;background:var(--card);color:var(--green);border:1px solid var(--border);border-radius:6px;padding:10px 12px;outline:none;width:100%;font-weight:700">
+        </div>
+
+        <div>
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Spread minimum</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="range" id="botSpread" min="0.5" max="10" step="0.1" value="2.0"
+              oninput="document.getElementById('botSpreadVal').textContent=parseFloat(this.value).toFixed(1)+'%'"
+              style="flex:1;accent-color:var(--green);cursor:pointer">
+            <span id="botSpreadVal" style="font-family:var(--mono);font-size:.84rem;color:var(--green);font-weight:700;min-width:42px">2.0%</span>
+          </div>
+        </div>
+
+        <div>
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Mode</div>
+          <select id="botDryRun"
+            style="font-family:var(--mono);font-size:.8rem;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 10px;outline:none;width:100%">
+            <option value="true">🧪 Simulation (recommandé)</option>
+            <option value="false">💰 Production (vrais trades)</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="botPairInfo" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:7px;padding:10px 14px;font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-bottom:12px;line-height:1.8"></div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-family:var(--mono);font-size:.72rem;color:var(--muted)">Capital total engagé</span>
+        <span style="font-family:var(--mono);font-size:.92rem;font-weight:700;color:var(--green)" id="botCapTotal">20 USDT</span>
+      </div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button onclick="botLaunch()" style="flex:1;font-family:var(--mono);font-size:.82rem;font-weight:700;background:var(--green);color:#0A0E1A;border:none;border-radius:6px;padding:11px 20px;cursor:pointer;min-width:140px">▶ Démarrer le bot</button>
+        <button onclick="botStop()" style="font-family:var(--mono);font-size:.8rem;font-weight:700;background:rgba(255,107,53,.15);color:var(--orange);border:1px solid rgba(255,107,53,.3);border-radius:6px;padding:11px 16px;cursor:pointer">⏹ Stop</button>
+        <button onclick="loadBotStatus()" style="font-family:var(--mono);font-size:.78rem;background:transparent;color:var(--green);border:1px solid var(--green);border-radius:6px;padding:11px 14px;cursor:pointer">↻</button>
+        <button onclick="botSendReport()" style="font-family:var(--mono);font-size:.78rem;background:transparent;color:var(--blue);border:1px solid var(--blue);border-radius:6px;padding:11px 14px;cursor:pointer">📊</button>
+        <button onclick="botGoStep1()" style="font-family:var(--mono);font-size:.76rem;background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:11px 14px;cursor:pointer">⚙ Reconfigurer</button>
+      </div>
+      <div id="botLaunchMsg" style="margin-top:10px;font-family:var(--mono);font-size:.74rem"></div>
+    </div>
+
+  </div>
+
+  <!-- HISTORIQUE DES TRADES -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px">
+    <div class="stitle">Historique des trades</div>
+    <div id="tradeHistoryList" style="display:flex;flex-direction:column;gap:8px">
+      <div class="empty"><div class="ei">◎</div>Aucun trade exécuté</div>
+    </div>
+  </div>
+
+</main>
 
 <footer>
-  <span>⚠ ArbiScan — données réelles via CCXT · 6 101 paires USDT · 10 exchanges · Pas de conseils financiers</span>
+  <span>⚠ ArbiScan Bot — 4 exchanges (Bybit · MEXC · HTX · KuCoin) · Pas de conseils financiers</span>
 </footer>
 
 <script>
-// ── CONFIG ────────────────────────────────────────────────────────────────────
-const EXCHANGES = ['binance','bybit','okx','kraken','kucoin','gate','mexc','bitget','htx','coinbaseadvanced'];
-let activeEx  = new Set(EXCHANGES);
-let autoTimer = null;
-
-// ── SIDEBAR HTML ──────────────────────────────────────────────────────────────
-function sidebarHTML() {
-  return `
-    <div>
-      <div class="sb-title">Spread minimum</div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
-        <input type="range" id="rSpread" min="0.05" max="5" step="0.05" value="0.05"
-          oninput="document.querySelectorAll('.spreadVal').forEach(e=>e.textContent=parseFloat(this.value).toFixed(2)+'%')">
-        <span class="spreadVal" style="font-family:var(--mono);font-size:.74rem;color:var(--green);white-space:nowrap;min-width:38px">0.05%</span>
-      </div>
-    </div>
-    <label>Capital (USDT)<input type="number" id="rCapital" value="1000" min="100" max="100000" step="100"></label>
-    <label>Paires à scanner
-      <select id="rPairs">
-        <option value="30" selected>Top 30 (~5s)</option>
-        <option value="50">Top 50 (~8s)</option>
-        <option value="100">Top 100 (~15s)</option>
-        <option value="200">Top 200 (~35s)</option>
-        <option value="500">Top 500 (~90s)</option>
-      </select>
-    </label>
-    <div>
-      <div class="sb-title">Exchanges actifs</div>
-      <div class="ex-grid" style="margin-top:6px">
-        ${EXCHANGES.map(id=>`<div class="ex-btn on" id="ex-${id}" onclick="toggleEx('${id}')"><div class="ex-dot"></div>${id}</div>`).join('')}
-      </div>
-    </div>
-    <button class="btn-run" id="btnRun" onclick="runScan()">
-      <span class="btn-ico">⬡ Lancer le scan</span><span class="spin"></span>
-    </button>
-    <button class="btn-full" onclick="runFull()">⬡ Scan complet (6 101 paires)</button>
-    <label style="flex-direction:row;align-items:center;gap:8px;cursor:pointer;margin-top:2px">
-      <input type="checkbox" id="rAuto" onchange="toggleAuto(this.checked)" style="accent-color:var(--green);width:auto">
-      <span style="font-size:.77rem">Auto-scan 30s</span>
-    </label>`;
-}
-
-function initSidebar() {
-  document.getElementById('sidebarDesk').innerHTML = sidebarHTML();
-  document.getElementById('drawerContent').innerHTML = sidebarHTML();
-}
-
-function toggleEx(id) {
-  if (activeEx.has(id)) { if(activeEx.size<=2) return; activeEx.delete(id); }
-  else activeEx.add(id);
-  document.querySelectorAll(`#ex-${id}`).forEach(el=>el.classList.toggle('on',activeEx.has(id)));
-}
-
-// ── TICKER ────────────────────────────────────────────────────────────────────
-function buildTicker() {
-  const data=[['BTC','94 200','▲','0.42%'],['ETH','3 280','▲','0.91%'],['BNB','612','▼','0.18%'],
-    ['SOL','172','▲','1.34%'],['XRP','0.618','▲','0.55%'],['DOGE','0.185','▼','0.72%'],
-    ['ADA','0.512','▲','0.29%'],['PEPE','0.000019','▲','3.2%'],['WIF','2.84','▲','1.8%']];
-  const t=document.getElementById('ticker');
-  t.innerHTML=[...data,...data].map(([s,p,d,c])=>
-    `<div class="tick"><span class="tick-sym">${s}/USDT</span><span>${p}</span><span class="${d==='▲'?'up':'dn'}">${d} ${c}</span></div>`
-  ).join('');
-}
-
-// ── TABS ──────────────────────────────────────────────────────────────────────
-let botPanelInited = false;
-function goTab(name) {
-  ['signals','alerts','bot'].forEach(n=>{
-    document.getElementById('tab-'+n).classList.toggle('active',n===name);
-    document.getElementById('panel-'+n).style.display=n===name?'flex':'none';
-  });
-  if(name==='alerts') loadAlertStatus();
-  if(name==='bot') {
-    if (!botPanelInited) { initBotPanel(); botPanelInited = true; }
-    loadBotStatus();
-  }
-}
-
-// ── MOBILE DRAWER ─────────────────────────────────────────────────────────────
-function openDrw(){document.getElementById('mobDrawer').classList.add('open');document.getElementById('mobOverlay').classList.add('open');document.body.style.overflow='hidden'}
-function closeDrw(){document.getElementById('mobDrawer').classList.remove('open');document.getElementById('mobOverlay').classList.remove('open');document.body.style.overflow=''}
-
-// ── SCAN ──────────────────────────────────────────────────────────────────────
-async function runScan() {
-  closeDrw();
-  const btns=document.querySelectorAll('#btnRun');
-  btns.forEach(b=>{b.disabled=true;b.classList.add('loading')});
-  setStatus('Scan en cours…',false);
-  showSkels();
-  try {
-    const resp = await fetch('/api/scan',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        minSpread:parseFloat(document.getElementById('rSpread')?.value||'0.05'),
-        capital:parseFloat(document.getElementById('rCapital')?.value||'1000'),
-        pairLimit:parseInt(document.getElementById('rPairs')?.value||'30'),
-        exchanges:[...activeEx], usePriority:true,
-      })
-    });
-    if(!resp.ok) throw new Error('HTTP '+resp.status);
-    const data=await resp.json();
-    renderStats(data.stats); renderSignals(data.opportunities);
-    setStatus('En direct',true);
-    document.getElementById('hTime').textContent=new Date().toLocaleTimeString('fr');
-    document.getElementById('hSig').textContent=data.stats.totalSignals;
-    document.getElementById('hEx').textContent=[...activeEx].length;
-  } catch(e) {
-    document.getElementById('sigList').innerHTML=`<div class="ebox">⚠ ${e.message}</div>`;
-    setStatus('Erreur',false);
-  } finally { btns.forEach(b=>{b.disabled=false;b.classList.remove('loading')}); }
-}
-
-async function runFull() {
-  closeDrw();
-  document.querySelectorAll('#btnRun').forEach(b=>b.disabled=true);
-  setStatus('Scan complet…',false); showSkels();
-  try {
-    const resp=await fetch('/api/scan/full',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({minSpread:0.05,capital:parseFloat(document.getElementById('rCapital')?.value||'1000'),exchanges:[...activeEx],maxPairs:200})});
-    const data=await resp.json();
-    renderStats(data.stats); renderSignals(data.opportunities);
-    setStatus('En direct',true);
-    document.getElementById('hTime').textContent=new Date().toLocaleTimeString('fr');
-    document.getElementById('hSig').textContent=data.stats.totalSignals;
-  } catch(e){
-    document.getElementById('sigList').innerHTML=`<div class="ebox">⚠ ${e.message}</div>`;
-  } finally { document.querySelectorAll('#btnRun').forEach(b=>b.disabled=false); }
-}
-
-function setStatus(txt,live){
-  document.getElementById('stxt').textContent=txt;
-  document.getElementById('sdot').className='sdot'+(live?' live':'');
-}
-function showSkels(){document.getElementById('sigList').innerHTML=Array(4).fill('<div class="skel"></div>').join('')}
-
-function renderStats(s){
-  document.getElementById('sBs').textContent=s.bestSpread?s.bestSpread.toFixed(2)+'%':'—';
-  document.getElementById('sBp').textContent=s.bestPair||'—';
-  document.getElementById('sBprf').textContent=s.totalNetProfit>0?'+'+s.totalNetProfit+' USDT':'—';
-  document.getElementById('sBr').textContent=s.bestRoute||'—';
-  document.getElementById('sTotal').textContent=s.totalSignals;
-  document.getElementById('sTime').textContent=s.scanDurationMs?'En '+(s.scanDurationMs/1000).toFixed(1)+'s':'—';
-}
-
-function renderSignals(opps) {
-  const el=document.getElementById('sigList');
-  if(!opps?.length){
-    el.innerHTML='<div class="empty"><div class="ei">◎</div>Aucune opportunité — baissez le spread.</div>';
-    return;
-  }
-  el.innerHTML = opps.map((o,i)=>{
-    const bc=o.risk==='low'?'bl':o.risk==='medium'?'bm':'bh';
-    const bl=o.risk==='low'?'FAIBLE':o.risk==='medium'?'MOYEN':'ÉLEVÉ';
-    return `<div class="sig" style="animation-delay:${i*45}ms">
-      <div class="badge ${bc}">${bl}</div>
-      <div>
-        <div class="sig-pair">${o.symbol}</div>
-        <div class="sig-route">Acheter <span class="ex">${o.buyExchange}</span><span class="arr"> → </span>Vendre <span class="ex">${o.sellExchange}</span></div>
-      </div>
-      <div class="sig-prices">
-        <div class="sig-buy">BUY $${fmt(o.buyPrice)}</div>
-        <div class="sig-sell">SELL $${fmt(o.sellPrice)}</div>
-      </div>
-      <div class="sig-prf">
-        <div class="sig-pct">+${o.spreadPct.toFixed(2)}%</div>
-        <div class="sig-net">+${o.netProfit.toFixed(2)} USDT</div>
-        <div class="cbar"><div class="cfill" style="width:${o.confidence}%"></div></div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function fmt(n){if(!n)return'—';return n>1000?n.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2}):parseFloat(n).toFixed(4)}
-
-function toggleAuto(on){
-  if(autoTimer){clearInterval(autoTimer);autoTimer=null}
-  if(on){runScan();autoTimer=setInterval(runScan,30000)}
-}
-
-// ── ALERTES ───────────────────────────────────────────────────────────────────
-async function loadAlertStatus(){
-  try{
-    const r=await fetch('/api/status');const d=await r.json();
-    document.getElementById('asScan').textContent=d.autoScanActive?'✅ Actif':'❌ Inactif';
-    document.getElementById('asTg').textContent=d.telegramConfigured?'✅ Configuré':'⚠ Non configuré';
-    document.getElementById('asThresh').textContent=`Spread > ${d.alertThreshold}%`;
-    if(d.lastScanTime)document.getElementById('asLast').textContent=new Date(d.lastScanTime).toLocaleTimeString('fr');
-    const el=document.getElementById('asSignals');
-    el.innerHTML=d.lastTopSignals?.length
-      ?d.lastTopSignals.map(s=>`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text)">${s.symbol}</span><span>${s.buyExchange}→${s.sellExchange}</span><span style="color:var(--green);font-weight:700">+${s.spreadPct?.toFixed(2)}%</span></div>`).join('')
-      :'Aucun signal lors du dernier scan auto.';
-  }catch{document.getElementById('asSignals').textContent='Impossible de charger.';}
-}
-
-async function testTg(){
-  const btn=document.getElementById('testBtn');const res=document.getElementById('testRes');
-  btn.disabled=true;btn.textContent='⏳ Envoi…';res.style.display='none';
-  try{
-    const r=await fetch('/api/alert/test',{method:'POST',headers:{'Content-Type':'application/json'}});
-    const d=await r.json();res.style.display='block';
-    res.style.color=d.success?'var(--green)':'var(--orange)';
-    res.textContent=d.success?'✅ Message envoyé !':'❌ '+d.message;
-  }catch(e){res.style.display='block';res.style.color='var(--orange)';res.textContent='❌ '+e.message;}
-  finally{btn.disabled=false;btn.textContent='📨 Envoyer message de test';}
-}
-
-
-// ── BOT TRADING — CONFIG UTILISATEUR ─────────────────────────────────────────
+// ── EXCHANGES DISPONIBLES POUR LE BOT (max 4, choisis pour limiter la RAM) ───
 const BOT_EXCHANGES = {
-  okx:     { name:'OKX',     ico:'🔵', pass:true  },
-  htx:     { name:'HTX',     ico:'🟠', pass:false },
-  binance: { name:'Binance', ico:'🟡', pass:false },
-  bybit:   { name:'Bybit',   ico:'🟤', pass:false },
-  kucoin:  { name:'KuCoin',  ico:'🟢', pass:true  },
-  mexc:    { name:'MEXC',    ico:'⚪', pass:false },
-  gate:    { name:'Gate.io', ico:'🔴', pass:false },
-  bitget:  { name:'Bitget',  ico:'🟣', pass:true  },
+  bybit:  { name:'Bybit',  ico:'🟤', pass:false },
+  mexc:   { name:'MEXC',   ico:'⚪', pass:false },
+  htx:    { name:'HTX',    ico:'🟠', pass:false },
+  kucoin: { name:'KuCoin', ico:'🟢', pass:true  },
 };
 let botSelExchanges = [];
 let botConnAPIs     = {};
@@ -754,11 +365,9 @@ async function botTestConns() {
     }
     let allOk = true;
     const html = botSelExchanges.map(id => {
-      const res = d.results?.[id] || {};
+      const res = d.results[id] || {};
       const ok  = res.success;
-      if(!ok) allOk = false;
-      const badge = document.getElementById('bcb-'+id);
-      if(badge) { badge.style.color=ok?'var(--green)':'var(--orange)'; badge.textContent=ok?'✅ Connecté':'❌ Échec'; }
+      if (!ok) allOk = false;
       return `<div style="background:var(--card);border:1px solid ${ok?'rgba(0,245,160,.25)':'rgba(255,107,53,.25)'};border-radius:7px;padding:11px 14px;display:flex;align-items:center;gap:10px">
         <span style="font-size:1.2rem">${BOT_EXCHANGES[id].ico}</span>
         <div>
@@ -857,7 +466,7 @@ async function botSendReport() {
   } catch(e){ msgEl.style.color='var(--orange)'; msgEl.textContent='Erreur: '+e.message; }
 }
 
-// ── LOAD BOT STATUS ─────────────────────────────────────────────────────────────
+// ── STATUT DU BOT ─────────────────────────────────────────────────────────────
 async function loadBotStatus() {
   try {
     const r  = await fetch('/api/bot/status');
@@ -870,6 +479,9 @@ async function loadBotStatus() {
     document.getElementById('botMode').textContent   = (cfg.dryRun ? '🧪 Simulation' : '💰 Production') + (cfg.selectedPair ? ' · '+cfg.selectedPair : '');
     document.getElementById('botPnL').textContent    = (d.totalPnL>=0?'+':'') + (d.totalPnL||0).toFixed(4);
     document.getElementById('botTradeCount').textContent = `${d.totalTrades||0} trades (${d.successTrades||0}✅ / ${d.failedTrades||0}❌)`;
+
+    document.getElementById('sdot').classList.toggle('live', d.running);
+    document.getElementById('stxt').textContent = d.running ? 'Bot actif' : 'Bot arrêté';
 
     const bals = d.balances || {};
     document.getElementById('ex1Name').textContent = ex1 ? (BOT_EXCHANGES[ex1]?.name || ex1.toUpperCase()) : '—';
@@ -907,12 +519,9 @@ function renderTrades(trades) {
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
-buildTicker();
-initSidebar();
-['signals','alerts','bot'].forEach(n=>{
-  document.getElementById('panel-'+n).style.display=n==='signals'?'flex':'none';
-});
-document.getElementById('sBs').textContent='—';
+initBotPanel();
+loadBotStatus();
+setInterval(loadBotStatus, 20000);
 </script>
 </body>
 </html>
