@@ -41,6 +41,7 @@ function saveBotConfig(config) {
       capital2:     config.capital2,
       minSpreadPct: config.minSpreadPct,
       dryRun:       config.dryRun,
+      autoRebalance: config.autoRebalance,
       // Encodage simple (base64) — évite l'exposition en clair dans les logs.
       // Ce n'est PAS un chiffrement fort : bot_config.json ne doit jamais être exposé publiquement.
       apiConfigs: config.apiConfigs ? encodeAPIs(config.apiConfigs) : null,
@@ -170,7 +171,7 @@ app.post('/api/bot/test-connections', requireAdminKey, async (req, res) => {
 
 // POST /api/bot/start — démarrer le bot avec config dynamique (2 exchanges au choix parmi 4)
 app.post('/api/bot/start', requireAdminKey, async (req, res) => {
-  const { pair, exchange1, exchange2, apiConfigs, capital1, capital2, minSpreadPct, dryRun } = req.body;
+  const { pair, exchange1, exchange2, apiConfigs, capital1, capital2, minSpreadPct, dryRun, autoRebalance } = req.body;
 
   if (!exchange1 || !exchange2) {
     return res.status(400).json({ error: 'Sélectionnez deux exchanges (exchange1, exchange2)' });
@@ -185,6 +186,7 @@ app.post('/api/bot/start', requireAdminKey, async (req, res) => {
     capital2:     parseFloat(capital2) || 10,
     minSpreadPct: parseFloat(minSpreadPct) || 2.0,
     dryRun:       dryRun === true || dryRun === 'true',
+    autoRebalance: autoRebalance === true || autoRebalance === 'true',
   };
 
   try {

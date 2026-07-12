@@ -21,6 +21,7 @@ const CONFIG = {
   ORDER_TIMEOUT:  10000,
   MAX_SLIPPAGE:   0.3,
   DRY_RUN:        process.env.DRY_RUN !== 'false',
+  AUTO_REBALANCE: false, // conversion locale USDT<->token sur l'exchange à sec, avant le trade
 };
 
 // ── EXCHANGES (construits dynamiquement selon la sélection utilisateur) ──────
@@ -163,6 +164,60 @@ async function fetchBalances() {
     }
   }
   return state.balances;
+}
+
+// ── RÉÉQUILIBRAGE LOCAL (USDT <-> TOKEN, SUR LE MÊME EXCHANGE) ───────────────
+// Si l'exchange d'achat manque d'USDT, ou l'exchange de vente manque du token
+// à vendre, on tente une conversion LOCALE (un ordre de marché sur ce même
+// exchange, pas de transfert entre exchanges) en utilisant l'autre actif déjà
+// présent là-bas. Ne change rien si AUTO_REBALANCE est désactivé.
+async function rebalanceIfNeeded(buyExchange, sellExchange, symbol, buyPrice) {
+  if (!CONFIG.AUTO_REBALANCE || CONFIG.DRY_RUN) return { ok: true }; // en simulation, hasEnoughFunds() valide déjà tout
+
+  const base         = symbol.split('/')[0];
+  const buyerCapital = capitalFor(buyExchange);
+  const neededToken  = buyerCapital / buyPrice;
+
+  const buyerUSDT   = state.balances[buyExchange]?.USDT || 0;
+  const sellerToken = state.balances[sellExchange]?.free?.[base] || 0;
+
+  // 1) L'exchange d'ACHAT manque d'USDT → vendre un peu de son stock de `base` pour en récupérer
+  if (buyerUSDT < buyerCapital) {
+    const shortfallUSDT = buyerCapital - buyerUSDT;
+    const buyerToken    = state.balances[buyExchange]?.free?.[base] || 0;
+    const tokenToSell   = (shortfallUSDT / buyPrice) * 1.02; // +2% marge pour frais/slippage
+    if (buyerToken < tokenToSell) {
+      return { ok: false, reason: `${buyExchange}: pas assez de ${base} pour se reconvertir en USDT (besoin ${tokenToSell.toFixed(6)}, dispo ${buyerToken.toFixed(6)})` };
+    }
+    try {
+      console.log(`🔁 Rééquilibrage ${buyExchange}: vente de ${tokenToSell.toFixed(6)} ${base} → USDT`);
+      await placeMarketOrder(buyExchange, symbol, 'sell', tokenToSell);
+      await tg(`🔁 *Rééquilibrage local* sur \`${buyExchange}\`\nVente de ${tokenToSell.toFixed(6)} ${base} → USDT (avant trade d'arbitrage)`);
+    } catch (e) {
+      return { ok: false, reason: `Rééquilibrage ${buyExchange} échoué: ${e.message}` };
+    }
+  }
+
+  // 2) L'exchange de VENTE manque du token `base` → acheter le manque avec son stock d'USDT
+  if (sellerToken < neededToken) {
+    const shortfallToken = neededToken - sellerToken;
+    const sellerUSDT      = state.balances[sellExchange]?.USDT || 0;
+    const usdtNeeded       = (shortfallToken * buyPrice) * 1.02; // +2% marge
+    if (sellerUSDT < usdtNeeded) {
+      return { ok: false, reason: `${sellExchange}: pas assez d'USDT pour racheter du ${base} (besoin ${usdtNeeded.toFixed(2)}, dispo ${sellerUSDT.toFixed(2)})` };
+    }
+    try {
+      console.log(`🔁 Rééquilibrage ${sellExchange}: achat de ${shortfallToken.toFixed(6)} ${base} avec USDT`);
+      await placeMarketOrder(sellExchange, symbol, 'buy', shortfallToken * 1.02);
+      await tg(`🔁 *Rééquilibrage local* sur \`${sellExchange}\`\nAchat de ${(shortfallToken*1.02).toFixed(6)} ${base} avec USDT (avant trade d'arbitrage)`);
+    } catch (e) {
+      return { ok: false, reason: `Rééquilibrage ${sellExchange} échoué: ${e.message}` };
+    }
+  }
+
+  // Rafraîchir les balances après conversion, avant de lancer le vrai trade d'arbitrage
+  await fetchBalances();
+  return { ok: true };
 }
 
 // ── VÉRIFIER QU'ON A ASSEZ DE FONDS ──────────────────────────────────────────
@@ -359,8 +414,17 @@ async function scanAndTrade() {
 
         const fundsCheck = hasEnoughFunds(opp.buyExchange, opp.sellExchange, symbol, opp.buyPrice);
         if (!fundsCheck.ok) {
-          console.log(`💰 Fonds insuffisants: ${fundsCheck.reason}`);
-          continue;
+          if (CONFIG.AUTO_REBALANCE) {
+            const rebalanced = await rebalanceIfNeeded(opp.buyExchange, opp.sellExchange, symbol, opp.buyPrice);
+            if (!rebalanced.ok) {
+              console.log(`💰 Fonds insuffisants (rééquilibrage impossible): ${rebalanced.reason}`);
+              continue;
+            }
+            console.log(`✅ Rééquilibré — trade peut continuer`);
+          } else {
+            console.log(`💰 Fonds insuffisants: ${fundsCheck.reason}`);
+            continue;
+          }
         }
 
         signalsFound++;
@@ -418,6 +482,7 @@ async function start(dynamicConfig = {}) {
   CONFIG.CAPITAL_2      = dynamicConfig.capital2 != null ? parseFloat(dynamicConfig.capital2) : CONFIG.CAPITAL_2;
   CONFIG.MIN_SPREAD_PCT = dynamicConfig.minSpreadPct != null ? parseFloat(dynamicConfig.minSpreadPct) : CONFIG.MIN_SPREAD_PCT;
   CONFIG.DRY_RUN        = dynamicConfig.dryRun !== undefined ? !!dynamicConfig.dryRun : CONFIG.DRY_RUN;
+  CONFIG.AUTO_REBALANCE = !!dynamicConfig.autoRebalance;
   CONFIG.SELECTED_PAIR  = dynamicConfig.pair || null;
 
   // Instances publiques (prix) — toujours nécessaires
@@ -447,6 +512,7 @@ async function start(dynamicConfig = {}) {
   console.log(`   Capital ${CONFIG.EXCHANGE_1.toUpperCase()}  : ${CONFIG.CAPITAL_1} USDT`);
   console.log(`   Capital ${CONFIG.EXCHANGE_2.toUpperCase()}  : ${CONFIG.CAPITAL_2} USDT`);
   console.log(`   Mode         : ${CONFIG.DRY_RUN ? '🧪 SIMULATION' : '💰 PRODUCTION'}`);
+  console.log(`   Rééquilibrage: ${CONFIG.AUTO_REBALANCE ? '🔁 Activé' : '⏸ Désactivé'}`);
   console.log(`   Scan interval: ${CONFIG.SCAN_INTERVAL / 1000}s\n`);
 
   try {
@@ -517,6 +583,7 @@ function getState() {
       capital2:     CONFIG.CAPITAL_2,
       minSpreadPct: CONFIG.MIN_SPREAD_PCT,
       dryRun:       CONFIG.DRY_RUN,
+      autoRebalance: CONFIG.AUTO_REBALANCE,
       selectedPair: CONFIG.SELECTED_PAIR || 'Multi-paires',
       scanIntervalSec: CONFIG.SCAN_INTERVAL / 1000,
     }
