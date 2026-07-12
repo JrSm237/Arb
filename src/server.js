@@ -1,14 +1,19 @@
 require('dotenv').config();
+const fs   = require('fs');
+const path = require('path');
 const express    = require('express');
 const cors       = require('cors');
-const path       = require('path');
 const ccxt       = require('ccxt');
 const { ALL_PAIRS, TIER1, getPrioritizedPairs, boostPair } = require('./pairs');
 const { processAlerts, sendStartupMessage }                 = require('./telegram');
 const autoScanner                                           = require('./autoScanner');
+const tradeBot                                               = require('./tradeBot');
+const tgCommander                                            = require('./telegramBot');
 
 const app  = express();
-const PORT = process.env.PORT || 3000;
+const PORT    = process.env.PORT || 3000;
+const APP_URL = process.env.APP_URL || 'https://arbiscan-f4fk.onrender.com';
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
 app.use(cors());
 app.use(express.json());
@@ -22,7 +27,7 @@ const EXCHANGE_IDS  = [
 const WAVE_SIZE     = 40;
 const WAVE_DELAY_MS = 200;
 
-// ── EXCHANGE INSTANCES ────────────────────────────────────────────────────────
+// ── EXCHANGE INSTANCES (scanner public — pas de clés) ─────────────────────────
 const exchangeInstances = {};
 
 function getExchange(id) {
@@ -149,7 +154,7 @@ async function scanInWaves(pairs, exchanges, minSpread, capital) {
   return allOpportunities;
 }
 
-// ── ROUTES ────────────────────────────────────────────────────────────────────
+// ── ROUTES SCANNER ────────────────────────────────────────────────────────────
 
 app.get('/api/exchanges', (req, res) => {
   res.json({ exchanges: EXCHANGE_IDS, totalPairs: ALL_PAIRS.length, tier1Pairs: TIER1 });
@@ -207,7 +212,6 @@ app.post('/api/scan', async (req, res) => {
     const allOpps = await scanInWaves(pairs, exchanges, parseFloat(minSpread), parseFloat(capital));
     allOpps.sort((a, b) => b.netProfit - a.netProfit);
 
-    // Déclencher alertes Telegram si signal > seuil
     await processAlerts(allOpps, parseFloat(process.env.ALERT_SPREAD || '2.0'));
 
     res.json({
@@ -261,68 +265,171 @@ app.post('/api/alert/test', async (req, res) => {
   res.json({ success: ok, message: ok ? 'Message envoyé !' : 'Échec — vérifiez TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID' });
 });
 
-// ── DÉMARRAGE ─────────────────────────────────────────────────────────────────
-app.listen(PORT, async () => {
-  console.log(`\n🟢 ArbiScan running → http://localhost:${PORT}`);
-  console.log(`   Exchanges    : ${EXCHANGE_IDS.length} exchanges`);
-  console.log(`   Paires total : ${ALL_PAIRS.length} paires`);
+// ── PERSISTANCE CONFIG BOT ────────────────────────────────────────────────────
+const BOT_CONFIG_FILE = path.join(__dirname, '..', 'bot_config.json');
 
-  // Initialiser et démarrer le scanner automatique
-  autoScanner.init(getPrices, findArbitrageOpportunities, EXCHANGE_IDS);
-  autoScanner.start();
-
-  // Message de démarrage Telegram
-  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
-    await sendStartupMessage();
+function saveBotConfig(config) {
+  try {
+    const toSave = {
+      pair:         config.pair,
+      exchange1:    config.exchange1,
+      exchange2:    config.exchange2,
+      capital1:     config.capital1,
+      capital2:     config.capital2,
+      minSpreadPct: config.minSpreadPct,
+      dryRun:       config.dryRun,
+      // Encodage simple (base64) — évite l'exposition en clair dans les logs.
+      // Ce n'est PAS un chiffrement fort : bot_config.json ne doit jamais être exposé publiquement.
+      apiConfigs: config.apiConfigs ? encodeAPIs(config.apiConfigs) : null,
+      savedAt: new Date().toISOString(),
+      autoRestart: true,
+    };
+    fs.writeFileSync(BOT_CONFIG_FILE, JSON.stringify(toSave, null, 2));
+    console.log('💾 Config bot sauvegardée');
+  } catch(e) {
+    console.error('Erreur sauvegarde config bot:', e.message);
   }
-});
-
-// ── ROUTES MONÉTISATION ───────────────────────────────────────────────────────
-
-// GET /api/plans — liste des plans
-
-// ── ROUTES BOT D'EXÉCUTION ────────────────────────────────────────────────────
-const tradeBot = require('./tradeBot');
-
-// Démarrer le bot automatiquement si les clés API sont configurées
-if (process.env.OKX_API_KEY && process.env.HTX_API_KEY) {
-  console.log('🤖 Démarrage du bot d\'exécution...');
-  tradeBot.start().catch(console.error);
-} else {
-  console.log('⚠ Bot d\'exécution désactivé (clés API manquantes)');
 }
 
-// GET /api/bot/status — état du bot
+function loadBotConfig() {
+  try {
+    if (!fs.existsSync(BOT_CONFIG_FILE)) return null;
+    const raw = fs.readFileSync(BOT_CONFIG_FILE, 'utf8');
+    const cfg = JSON.parse(raw);
+    if (cfg.apiConfigs) cfg.apiConfigs = decodeAPIs(cfg.apiConfigs);
+    console.log('📂 Config bot restaurée:', cfg.pair, cfg.exchange1, '↔', cfg.exchange2);
+    return cfg;
+  } catch(e) {
+    console.error('Erreur chargement config bot:', e.message);
+    return null;
+  }
+}
+
+function clearBotConfig() {
+  try {
+    if (fs.existsSync(BOT_CONFIG_FILE)) {
+      fs.unlinkSync(BOT_CONFIG_FILE);
+      console.log('🗑 Config bot supprimée');
+    }
+  } catch(e) {}
+}
+
+function encodeAPIs(apiConfigs) {
+  const encoded = {};
+  for (const [id, cfg] of Object.entries(apiConfigs)) {
+    encoded[id] = {
+      apiKey:     Buffer.from(cfg.apiKey     || '').toString('base64'),
+      secret:     Buffer.from(cfg.secret     || '').toString('base64'),
+      passphrase: Buffer.from(cfg.passphrase || '').toString('base64'),
+    };
+  }
+  return encoded;
+}
+
+function decodeAPIs(encoded) {
+  const decoded = {};
+  for (const [id, cfg] of Object.entries(encoded)) {
+    decoded[id] = {
+      apiKey:     Buffer.from(cfg.apiKey     || '', 'base64').toString('utf8'),
+      secret:     Buffer.from(cfg.secret     || '', 'base64').toString('utf8'),
+      passphrase: Buffer.from(cfg.passphrase || '', 'base64').toString('utf8'),
+    };
+  }
+  return decoded;
+}
+
+// ── AUTH SIMPLE POUR LES ROUTES BOT (une seule clé admin, définie dans .env) ──
+function requireAdminKey(req, res, next) {
+  if (!ADMIN_KEY) {
+    return res.status(500).json({ error: "ADMIN_KEY n'est pas configurée sur le serveur (variable d'environnement)" });
+  }
+  if (req.body?.adminKey !== ADMIN_KEY) {
+    return res.status(403).json({ error: 'Clé admin invalide' });
+  }
+  next();
+}
+
+// ── ROUTES BOT D'EXÉCUTION ────────────────────────────────────────────────────
+
+// GET /api/bot/status — état du bot (public : lecture seule, aucune donnée sensible)
 app.get('/api/bot/status', (req, res) => {
   res.json(tradeBot.getState());
 });
 
-// POST /api/bot/start — démarrer le bot avec config dynamique
-app.post('/api/bot/start', async (req, res) => {
-  const { adminKey, okxCapital, htxCapital, minSpreadPct, dryRun } = req.body;
-  if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Accès refusé' });
+// POST /api/bot/test-connections — tester des clés API avant de démarrer le bot
+app.post('/api/bot/test-connections', requireAdminKey, async (req, res) => {
+  const { exchanges: exIds, apiConfigs } = req.body;
+  const results = {};
 
-  // Passer la config dynamique au bot
+  for (const id of (exIds || [])) {
+    const cfg = apiConfigs?.[id] || {};
+    try {
+      const ExClass = ccxt[id];
+      if (!ExClass) { results[id] = { success: false, error: `Exchange "${id}" non supporté` }; continue; }
+
+      const ex = new ExClass({
+        apiKey:   cfg.apiKey,
+        secret:   cfg.secret,
+        password: cfg.passphrase || '',
+        timeout:  8000,
+        enableRateLimit: true,
+        options: { defaultType: 'spot' },
+      });
+
+      const bal  = await ex.fetchBalance();
+      const usdt = bal?.USDT?.free ?? bal?.USDT?.total ?? 0;
+
+      results[id] = {
+        success:     true,
+        usdtBalance: parseFloat(usdt) || 0,
+        message:     `Connecté — ${parseFloat(usdt).toFixed(2)} USDT disponible`,
+      };
+      console.log(`✅ ${id} connecté — USDT: ${usdt}`);
+    } catch (e) {
+      results[id] = {
+        success: false,
+        error:   e.message?.split('\n')[0]?.slice(0, 120) || 'Erreur connexion',
+      };
+      console.error(`❌ ${id} échec:`, e.message?.slice(0, 100));
+    }
+  }
+
+  res.json({ results });
+});
+
+// POST /api/bot/start — démarrer le bot avec config dynamique (2 exchanges au choix)
+app.post('/api/bot/start', requireAdminKey, async (req, res) => {
+  const { pair, exchange1, exchange2, apiConfigs, capital1, capital2, minSpreadPct, dryRun } = req.body;
+
+  if (!exchange1 || !exchange2) {
+    return res.status(400).json({ error: 'Sélectionnez deux exchanges (exchange1, exchange2)' });
+  }
+
   const config = {
-    okxCapital:    parseFloat(okxCapital)  || 10,
-    htxCapital:    parseFloat(htxCapital)  || 10,
-    minSpreadPct:  parseFloat(minSpreadPct)|| 2.0,
-    dryRun:        dryRun === true || dryRun === 'true',
+    pair, exchange1, exchange2, apiConfigs,
+    capital1:     parseFloat(capital1) || 10,
+    capital2:     parseFloat(capital2) || 10,
+    minSpreadPct: parseFloat(minSpreadPct) || 2.0,
+    dryRun:       dryRun === true || dryRun === 'true',
   };
 
-  await tradeBot.start(config);
-  const modeLabel = config.dryRun ? '🧪 Simulation' : '💰 Production';
-  res.json({
-    success: true,
-    message: `✅ Bot démarré — ${modeLabel} | OKX: ${config.okxCapital} USDT | HTX: ${config.htxCapital} USDT | Spread min: ${config.minSpreadPct}%`
-  });
+  try {
+    await tradeBot.start(config);
+    saveBotConfig(config);
+    const modeLabel = config.dryRun ? '🧪 Simulation' : '💰 Production';
+    res.json({
+      success: true,
+      message: `✅ Bot démarré — ${modeLabel} | ${exchange1.toUpperCase()}: ${config.capital1} USDT | ${exchange2.toUpperCase()}: ${config.capital2} USDT | Spread min: ${config.minSpreadPct}%`
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // POST /api/bot/stop — arrêter le bot
-app.post('/api/bot/stop', (req, res) => {
-  const { adminKey } = req.body;
-  if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Accès refusé' });
+app.post('/api/bot/stop', requireAdminKey, (req, res) => {
   tradeBot.stop();
+  clearBotConfig(); // Supprimer la config — pas de redémarrage automatique
   res.json({ success: true, message: 'Bot arrêté' });
 });
 
@@ -348,147 +455,79 @@ app.get('/api/bot/balances', async (req, res) => {
   }
 });
 
-// POST /api/bot/report — envoyer rapport hebdomadaire manuellement
-app.post('/api/bot/report', async (req, res) => {
-  const { adminKey } = req.body;
-  if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Accès refusé' });
+// POST /api/bot/report — envoyer rapport manuellement
+app.post('/api/bot/report', requireAdminKey, async (req, res) => {
   await tradeBot.sendWeeklyReport();
   res.json({ success: true });
 });
 
-// ── ROUTES ADMIN ──────────────────────────────────────────────────────────────
-
-const ADMIN_EMAIL    = (process.env.ADMIN_EMAIL    || '').trim().toLowerCase();
-const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || '').trim();
-
-// Debug au démarrage (visible dans les logs Render)
-console.log(`🔑 Admin email configuré : "${ADMIN_EMAIL || 'NON DÉFINI'}"`);
-console.log(`🔑 Admin password configuré : ${ADMIN_PASSWORD ? 'OUI (' + ADMIN_PASSWORD.length + ' caractères)' : 'NON DÉFINI'}`);
-
-// POST /api/admin/login — connexion admin (email + mot de passe)
-app.post('/api/admin/login', async (req, res) => {
-  const emailInput    = (req.body.email    || '').trim().toLowerCase();
-  const passwordInput = (req.body.password || '').trim();
-
-  console.log(`🔐 Tentative admin : "${emailInput}"`);
-
-  if (!emailInput || !passwordInput) {
-    return res.status(400).json({ error: 'Email et mot de passe requis' });
+// POST /api/bot/keepalive — activer/désactiver le ping keep-alive
+app.post('/api/bot/keepalive', requireAdminKey, (req, res) => {
+  const { action } = req.body;
+  if (action === 'on') {
+    tgCommander.startKeepAlive(process.env.TELEGRAM_CHAT_ID);
+    res.json({ success: true, message: '✅ Keep-alive activé (ping toutes les 13 min)' });
+  } else {
+    tgCommander.stopKeepAlive();
+    res.json({ success: true, message: '⏹ Keep-alive désactivé' });
   }
-
-  // Vérifier que les variables sont configurées
-  if (!ADMIN_EMAIL) {
-    console.error('❌ ADMIN_EMAIL non configuré dans les variables Render');
-    return res.status(500).json({ error: 'Admin non configuré — ajoutez ADMIN_EMAIL dans Render' });
-  }
-  if (!ADMIN_PASSWORD) {
-    console.error('❌ ADMIN_PASSWORD non configuré dans les variables Render');
-    return res.status(500).json({ error: 'Admin non configuré — ajoutez ADMIN_PASSWORD dans Render' });
-  }
-
-  // Comparer email
-  if (emailInput !== ADMIN_EMAIL) {
-    console.log(`❌ Email incorrect : "${emailInput}" ≠ "${ADMIN_EMAIL}"`);
-    return res.status(401).json({ error: 'Identifiants incorrects' });
-  }
-
-  // Comparer mot de passe (comparaison directe, pas de bcrypt)
-  if (passwordInput !== ADMIN_PASSWORD) {
-    console.log('❌ Mot de passe incorrect');
-    return res.status(401).json({ error: 'Identifiants incorrects' });
-  }
-
-  // Générer token JWT
-  const jwt   = require('jsonwebtoken');
-  const token = jwt.sign(
-    { email: emailInput, role: 'admin', is_admin: true },
-    process.env.JWT_SECRET || 'arbiscan-secret-default',
-    { expiresIn: '24h' }
-  );
-
-  console.log(`✅ Admin connecté : ${emailInput}`);
-  res.json({
-    success:  true,
-    token,
-    adminKey: process.env.ADMIN_KEY || 'admin',
-    email:    emailInput,
-  });
 });
 
-// POST /api/admin/telegram — envoyer message Telegram custom
-app.post('/api/admin/telegram', async (req, res) => {
-  const { adminKey, message } = req.body;
-  if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Accès refusé' });
-  if (!message) return res.status(400).json({ error: 'Message vide' });
-
-  const { sendTelegram } = require('./telegram');
-  const ok = await sendTelegram(message);
-  res.json({ success: ok });
+// GET /api/bot/keepalive — statut
+app.get('/api/bot/keepalive', (req, res) => {
+  res.json({ active: tgCommander.isKeepAliveActive() });
 });
 
-// Middleware vérif token admin
-function requireAdminToken(req, res, next) {
-  const auth = req.headers.authorization || '';
-  const tok  = auth.replace('Bearer ', '');
-  if (!tok) return res.status(401).json({ error: 'Non authentifié' });
-  try {
-    const jwt     = require('jsonwebtoken');
-    const decoded = jwt.verify(tok, process.env.JWT_SECRET || 'arbiscan-secret');
-    if (decoded.role !== 'admin') return res.status(403).json({ error: 'Accès admin requis' });
-    req.admin = decoded;
-    next();
-  } catch {
-    return res.status(401).json({ error: 'Token invalide' });
+// ── WEBHOOK TELEGRAM — COMMANDES BOT ─────────────────────────────────────────
+app.post('/telegram-webhook', async (req, res) => {
+  res.sendStatus(200);
+  await tgCommander.processUpdate(req.body, tradeBot, loadBotConfig, saveBotConfig);
+});
+
+// ── DÉMARRAGE ─────────────────────────────────────────────────────────────────
+app.listen(PORT, async () => {
+  console.log(`\n🟢 ArbiScan running → http://localhost:${PORT}`);
+  console.log(`   Exchanges    : ${EXCHANGE_IDS.length} exchanges`);
+  console.log(`   Paires total : ${ALL_PAIRS.length} paires`);
+  if (!ADMIN_KEY) {
+    console.warn('⚠️  ADMIN_KEY non définie — les routes de contrôle du bot (start/stop/report) refuseront toutes les requêtes tant que cette variable n\'est pas configurée.');
   }
-}
 
-// ── ROUTE TEST CONNEXIONS EXCHANGES ──────────────────────────────────────────
-app.post('/api/bot/test-connections', async (req, res) => {
-  const { adminKey, exchanges: exIds, apiConfigs } = req.body;
-  if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Accès refusé' });
+  // Initialiser et démarrer le scanner automatique de signaux
+  autoScanner.init(getPrices, findArbitrageOpportunities, EXCHANGE_IDS);
+  autoScanner.start();
 
-  const ccxt    = require('ccxt');
-  const results = {};
-
-  for (const id of (exIds || [])) {
-    const cfg = apiConfigs?.[id] || {};
+  // ── REDÉMARRAGE AUTOMATIQUE DU BOT ────────────────────────────────────────
+  const savedConfig = loadBotConfig();
+  if (savedConfig && savedConfig.autoRestart) {
+    console.log('🔄 Redémarrage automatique du bot...');
     try {
-      // Créer instance avec les clés fournies
-      const ExClass = ccxt[id];
-      if (!ExClass) { results[id] = { success: false, error: `Exchange "${id}" non supporté` }; continue; }
+      await tradeBot.start(savedConfig);
+      console.log(`✅ Bot relancé automatiquement sur ${savedConfig.pair || 'multi-paires'}`);
 
-      const ex = new ExClass({
-        apiKey:   cfg.apiKey,
-        secret:   cfg.secret,
-        password: cfg.passphrase || '',
-        timeout:  8000,
-        enableRateLimit: true,
-        options: { defaultType: 'spot' },
-      });
+      const { sendTelegram } = require('./telegram');
+      await sendTelegram(`🔄 *ArbiScan Bot — Redémarrage automatique*
 
-      // Tester avec fetchBalance (nécessite authentification)
-      const bal  = await ex.fetchBalance();
-      const usdt = bal?.USDT?.free ?? bal?.USDT?.total ?? 0;
+Le serveur a redémarré et le bot a été relancé automatiquement.
 
-      results[id] = {
-        success:     true,
-        usdtBalance: parseFloat(usdt) || 0,
-        message:     `Connecté — ${parseFloat(usdt).toFixed(2)} USDT disponible`,
-      };
+💎 *Paire :* ${savedConfig.pair || 'Multi-paires'}
+🏦 *Exchanges :* ${savedConfig.exchange1?.toUpperCase()} ↔ ${savedConfig.exchange2?.toUpperCase()}
+🤖 *Mode :* ${savedConfig.dryRun ? '🧪 Simulation' : '💰 Production'}
 
-      console.log(`✅ ${id} connecté — USDT: ${usdt}`);
+_Le bot continue de fonctionner en arrière-plan._`);
 
-    } catch (e) {
-      results[id] = {
-        success: false,
-        error:   e.message?.split('\n')[0]?.slice(0, 120) || 'Erreur connexion',
-      };
-      console.error(`❌ ${id} échec:`, e.message?.slice(0, 100));
+    } catch(e) {
+      console.error('❌ Échec redémarrage automatique:', e.message);
+      clearBotConfig();
     }
+  } else {
+    console.log('ℹ Bot non configuré — en attente de démarrage via le site');
   }
 
-  res.json({ results });
+  // Message de démarrage Telegram
+  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+    await sendStartupMessage();
+    await tgCommander.setupWebhook(APP_URL);
+    tgCommander.startKeepAlive(process.env.TELEGRAM_CHAT_ID);
+  }
 });
-
-// Mettre à jour /api/bot/start pour accepter exchange1/exchange2 dynamiques
-// (overwrite la config du bot avec les exchanges et clés fournis)

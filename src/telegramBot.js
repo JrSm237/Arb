@@ -137,7 +137,7 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
 
   // ── /start_bot ─────────────────────────────────────────────────────────────
   if (text === '/start_bot') {
-    if (state && state.running) {
+    if (tradeBot.getState().running) {
       await send(chatId, '⚠️ Le bot est déjà en cours d\'exécution. Utilisez /status pour voir son état.');
       return;
     }
