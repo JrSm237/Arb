@@ -1,7 +1,7 @@
 {
   "name": "arbiscan",
-  "version": "2.0.0",
-  "description": "Crypto arbitrage platform — 6101 USDT pairs, 10 exchanges, Telegram bot commander, auto keep-alive",
+  "version": "2.1.0",
+  "description": "Crypto arbitrage platform — scanner multi-exchanges CCXT + bot de trading automatique + alertes/commandes Telegram",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
