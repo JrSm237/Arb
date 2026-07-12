@@ -110,3 +110,13 @@ Ceci n'est pas un conseil financier. Le trading algorithmique comporte des risqu
 capital (slippage, latence, retraits d'ordres, pannes d'exchange...). Teste toujours en mode
 **Simulation** avant de passer en **Production**, et ne mets que des montants que tu peux te
 permettre de perdre.
+
+## Mémoire / hébergement
+Le scanner interroge en parallèle plusieurs exchanges via CCXT, qui garde en mémoire la liste
+complète des marchés de chaque exchange (plusieurs Mo chacun). Sur une instance à RAM très limitée
+(ex: petits plans gratuits ~512 Mo), le cumul scanner automatique + scan manuel + bot de trading
+peut faire planter le process avec une erreur `JavaScript heap out of memory`. Si ça arrive :
+- Réduis `AUTO_SCAN_PAIRS` dans `.env` (ex: 15-20)
+- Évite de laisser tourner en même temps le scan automatique client ("Auto-scan 30s") ET le
+  scanner serveur (déjà actif en permanence) ET le bot de trading
+- Si le problème persiste, passe sur un plan avec plus de RAM (1 Go recommandé)
