@@ -83,9 +83,11 @@ footer{padding:16px 24px;border-top:1px solid var(--border);font-size:.67rem;col
   <div class="stat-row">
     <div class="scard"><div class="scard-lbl">Statut bot</div><div class="scard-val" id="botStatus">🔴 Arrêté</div><div class="scard-sub" id="botMode">—</div></div>
     <div class="scard"><div class="scard-lbl">PnL Total</div><div class="scard-val" id="botPnL">0.0000</div><div class="scard-sub" id="botTradeCount">0 trades</div></div>
-    <div class="scard"><div class="scard-lbl">Exchange 1</div><div class="scard-val" id="ex1Bal">—</div><div class="scard-sub" id="ex1Name">—</div></div>
-    <div class="scard"><div class="scard-lbl">Exchange 2</div><div class="scard-val" id="ex2Bal">—</div><div class="scard-sub" id="ex2Name">—</div></div>
+    <div class="scard"><div class="scard-lbl" id="ex1Name">Exchange 1</div><div class="scard-val" id="ex1Bal">—</div><div class="scard-sub" id="ex1Token">—</div></div>
+    <div class="scard"><div class="scard-lbl" id="ex2Name">Exchange 2</div><div class="scard-val" id="ex2Bal">—</div><div class="scard-sub" id="ex2Token">—</div></div>
   </div>
+
+  <div id="posBar" style="display:none;background:var(--card);border:1px solid rgba(0,245,160,.25);border-radius:8px;padding:12px 16px;font-family:var(--mono);font-size:.76rem"></div>
 
   <!-- ÉTAPES -->
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px">
@@ -168,7 +170,7 @@ footer{padding:16px 24px;border-top:1px solid var(--border);font-size:.67rem;col
         </div>
 
         <div>
-          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Spread minimum</div>
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Écart minimum (achat / prise de profit)</div>
           <div style="display:flex;align-items:center;gap:8px">
             <input type="range" id="botSpread" min="0.5" max="10" step="0.1" value="2.0"
               oninput="document.getElementById('botSpreadVal').textContent=parseFloat(this.value).toFixed(1)+'%'"
@@ -185,21 +187,22 @@ footer{padding:16px 24px;border-top:1px solid var(--border);font-size:.67rem;col
             <option value="false">💰 Production (vrais trades)</option>
           </select>
         </div>
+
+        <div style="grid-column:1/-1">
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">🛑 Stop-loss (coupe la position si elle perd plus que ça)</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="range" id="botStopLoss" min="1" max="20" step="0.5" value="5"
+              oninput="document.getElementById('botStopLossVal').textContent=parseFloat(this.value).toFixed(1)+'%'"
+              style="flex:1;accent-color:var(--orange);cursor:pointer">
+            <span id="botStopLossVal" style="font-family:var(--mono);font-size:.84rem;color:var(--orange);font-weight:700;min-width:42px">5.0%</span>
+          </div>
+        </div>
       </div>
 
       <div id="botPairInfo" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:7px;padding:10px 14px;font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-bottom:12px;line-height:1.8"></div>
 
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:7px;padding:11px 14px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px">
-        <div>
-          <div style="font-family:var(--mono);font-size:.76rem;font-weight:700">🔁 Rééquilibrage automatique</div>
-          <div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-top:3px;line-height:1.6">Si un exchange manque de USDT ou de la crypto pour trader, convertit localement (ordre de marché sur place, pas de transfert). Ajoute des frais supplémentaires.</div>
-        </div>
-        <label style="position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0">
-          <input type="checkbox" id="botAutoRebalance" style="opacity:0;width:0;height:0">
-          <span onclick="const cb=document.getElementById('botAutoRebalance');cb.checked=!cb.checked;this.style.background=cb.checked?'var(--green)':'var(--border)';this.firstElementChild.style.transform=cb.checked?'translateX(18px)':'translateX(0)'" style="position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:24px;transition:.2s">
-            <span style="position:absolute;height:18px;width:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s"></span>
-          </span>
-        </label>
+      <div style="background:rgba(59,130,246,.07);border:1px solid rgba(59,130,246,.2);border-radius:7px;padding:10px 14px;font-family:var(--mono);font-size:.68rem;color:var(--blue);margin-bottom:12px;line-height:1.7">
+        ℹ️ Dépose uniquement de l'<strong>USDT</strong> sur les deux exchanges. Le bot achète lui-même le token quand un exchange est nettement moins cher que l'autre, puis revend sur ce même exchange dès que le gain net atteint ton seuil — ou coupe la position si elle perd plus que ton stop-loss. Pas besoin de préparer les deux actifs à l'avance.
       </div>
 
       <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
@@ -447,7 +450,7 @@ async function botLaunch() {
   const cap2   =parseFloat(document.getElementById('botCap2')?.value)||10;
   const spread =parseFloat(document.getElementById('botSpread')?.value)||2.0;
   const dryRun =document.getElementById('botDryRun')?.value==='true';
-  const autoRebalance = document.getElementById('botAutoRebalance')?.checked || false;
+  const stopLossPct = parseFloat(document.getElementById('botStopLoss')?.value)||5.0;
   const msgEl  =document.getElementById('botLaunchMsg');
   if(!/^[A-Z0-9]+\/USDT$/.test(pair)) { msgEl.style.color='var(--orange)'; msgEl.textContent='⚠ Paire invalide'; return; }
   const adminKey = getAdminKey();
@@ -455,7 +458,7 @@ async function botLaunch() {
   msgEl.style.color='var(--muted)'; msgEl.textContent=`⏳ Démarrage sur ${pair}…`;
   try {
     const r=await fetch('/api/bot/start',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({adminKey,pair,exchange1:botSelExchanges[0],exchange2:botSelExchanges[1],apiConfigs:botConnAPIs,capital1:cap1,capital2:cap2,minSpreadPct:spread,dryRun,autoRebalance})});
+      body:JSON.stringify({adminKey,pair,exchange1:botSelExchanges[0],exchange2:botSelExchanges[1],apiConfigs:botConnAPIs,capital1:cap1,capital2:cap2,minSpreadPct:spread,stopLossPct,dryRun})});
     const d=await r.json();
     msgEl.style.color=d.success?'var(--green)':'var(--orange)'; msgEl.textContent=d.message||d.error;
     if(d.success) setTimeout(loadBotStatus,2000);
@@ -482,6 +485,13 @@ async function botSendReport() {
 }
 
 // ── STATUT DU BOT ─────────────────────────────────────────────────────────────
+function fmtPrice(p) {
+  if (!p) return '0';
+  if (p >= 1) return p.toFixed(4);
+  if (p >= 0.01) return p.toFixed(6);
+  return p.toPrecision(4);
+}
+
 async function loadBotStatus() {
   try {
     const r  = await fetch('/api/bot/status');
@@ -499,10 +509,25 @@ async function loadBotStatus() {
     document.getElementById('stxt').textContent = d.running ? 'Bot actif' : 'Bot arrêté';
 
     const bals = d.balances || {};
-    document.getElementById('ex1Name').textContent = ex1 ? (BOT_EXCHANGES[ex1]?.name || ex1.toUpperCase()) : '—';
-    document.getElementById('ex2Name').textContent = ex2 ? (BOT_EXCHANGES[ex2]?.name || ex2.toUpperCase()) : '—';
+    const base = (cfg.selectedPair||'').split('/')[0];
+    document.getElementById('ex1Name').textContent = ex1 ? (BOT_EXCHANGES[ex1]?.name || ex1.toUpperCase()) : 'Exchange 1';
+    document.getElementById('ex2Name').textContent = ex2 ? (BOT_EXCHANGES[ex2]?.name || ex2.toUpperCase()) : 'Exchange 2';
     document.getElementById('ex1Bal').textContent  = ex1 && bals[ex1] ? (bals[ex1].USDT||0).toFixed(2)+' USDT' : '—';
     document.getElementById('ex2Bal').textContent  = ex2 && bals[ex2] ? (bals[ex2].USDT||0).toFixed(2)+' USDT' : '—';
+    const tok1 = ex1 && bals[ex1]?.free?.[base] || 0;
+    const tok2 = ex2 && bals[ex2]?.free?.[base] || 0;
+    document.getElementById('ex1Token').textContent = base ? `${tok1.toLocaleString('fr',{maximumFractionDigits:6})} ${base}` : '—';
+    document.getElementById('ex2Token').textContent = base ? `${tok2.toLocaleString('fr',{maximumFractionDigits:6})} ${base}` : '—';
+
+    const posBar = document.getElementById('posBar');
+    if (d.position) {
+      const p = d.position;
+      const exName = BOT_EXCHANGES[p.exchange]?.name || p.exchange?.toUpperCase();
+      posBar.style.display = 'block';
+      posBar.innerHTML = `🟢 <strong style="color:var(--green)">Position ouverte</strong> sur ${exName} — ${p.quantity.toLocaleString('fr',{maximumFractionDigits:6})} ${base||''} achetés à $${fmtPrice(p.entryPrice)} · ouverte depuis ${Math.round((Date.now()-p.entryTime)/60000)} min`;
+    } else {
+      posBar.style.display = 'none';
+    }
 
     renderTrades(d.tradeHistory || []);
   } catch(e) {
