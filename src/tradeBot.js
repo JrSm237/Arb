@@ -86,6 +86,14 @@ const state = {
   tradeHistory:  [],
 };
 
+// ── FORMATAGE PRIX (précision dynamique — évite "$0.0000" pour BONK/PEPE...) ──
+function fmtPrice(p) {
+  if (!p || p === 0) return '0';
+  if (p >= 1)     return p.toFixed(4);
+  if (p >= 0.01)  return p.toFixed(6);
+  return p.toPrecision(4); // ex: 0.000003842 → "0.000003842" reste lisible
+}
+
 // ── TELEGRAM ──────────────────────────────────────────────────────────────────
 async function tg(msg) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
@@ -185,9 +193,13 @@ async function rebalanceIfNeeded(buyExchange, sellExchange, symbol, buyPrice) {
   if (buyerUSDT < buyerCapital) {
     const shortfallUSDT = buyerCapital - buyerUSDT;
     const buyerToken    = state.balances[buyExchange]?.free?.[base] || 0;
-    const tokenToSell   = (shortfallUSDT / buyPrice) * 1.02; // +2% marge pour frais/slippage
-    if (buyerToken < tokenToSell) {
-      return { ok: false, reason: `${buyExchange}: pas assez de ${base} pour se reconvertir en USDT (besoin ${tokenToSell.toFixed(6)}, dispo ${buyerToken.toFixed(6)})` };
+    const idealSell     = (shortfallUSDT / buyPrice) * 1.005; // +0.5% marge (frais/slippage)
+    // Sur un petit capital, exiger la marge complète peut faire échouer inutilement
+    // le rééquilibrage même quand on a "presque" assez. On vend au maximum ce qui
+    // est dispo, avec un minimum de marge de sécurité (0.2%) pour ne pas vider le compte.
+    const tokenToSell = Math.min(idealSell, buyerToken * 0.998);
+    if (tokenToSell <= 0 || buyerToken < (shortfallUSDT / buyPrice) * 1.001) {
+      return { ok: false, reason: `${buyExchange}: pas assez de ${base} pour se reconvertir en USDT (besoin ~${(shortfallUSDT/buyPrice).toFixed(6)}, dispo ${buyerToken.toFixed(6)})` };
     }
     try {
       console.log(`🔁 Rééquilibrage ${buyExchange}: vente de ${tokenToSell.toFixed(6)} ${base} → USDT`);
@@ -202,14 +214,16 @@ async function rebalanceIfNeeded(buyExchange, sellExchange, symbol, buyPrice) {
   if (sellerToken < neededToken) {
     const shortfallToken = neededToken - sellerToken;
     const sellerUSDT      = state.balances[sellExchange]?.USDT || 0;
-    const usdtNeeded       = (shortfallToken * buyPrice) * 1.02; // +2% marge
-    if (sellerUSDT < usdtNeeded) {
-      return { ok: false, reason: `${sellExchange}: pas assez d'USDT pour racheter du ${base} (besoin ${usdtNeeded.toFixed(2)}, dispo ${sellerUSDT.toFixed(2)})` };
+    const idealUsdt        = (shortfallToken * buyPrice) * 1.005; // +0.5% marge
+    const usdtToUse        = Math.min(idealUsdt, sellerUSDT * 0.998);
+    if (usdtToUse <= 0 || sellerUSDT < (shortfallToken * buyPrice) * 1.001) {
+      return { ok: false, reason: `${sellExchange}: pas assez d'USDT pour racheter du ${base} (besoin ~${(shortfallToken*buyPrice).toFixed(2)}, dispo ${sellerUSDT.toFixed(2)})` };
     }
+    const amountToBuy = usdtToUse / buyPrice;
     try {
-      console.log(`🔁 Rééquilibrage ${sellExchange}: achat de ${shortfallToken.toFixed(6)} ${base} avec USDT`);
-      await placeMarketOrder(sellExchange, symbol, 'buy', shortfallToken * 1.02);
-      await tg(`🔁 *Rééquilibrage local* sur \`${sellExchange}\`\nAchat de ${(shortfallToken*1.02).toFixed(6)} ${base} avec USDT (avant trade d'arbitrage)`);
+      console.log(`🔁 Rééquilibrage ${sellExchange}: achat de ${amountToBuy.toFixed(6)} ${base} avec USDT`);
+      await placeMarketOrder(sellExchange, symbol, 'buy', amountToBuy);
+      await tg(`🔁 *Rééquilibrage local* sur \`${sellExchange}\`\nAchat de ${amountToBuy.toFixed(6)} ${base} avec USDT (avant trade d'arbitrage)`);
     } catch (e) {
       return { ok: false, reason: `Rééquilibrage ${sellExchange} échoué: ${e.message}` };
     }
@@ -321,8 +335,8 @@ async function executeTrade(opp) {
 📈 *Spread :* \`+${spreadPct.toFixed(2)}%\`
 💰 *PnL estimé :* \`+${netPnL.toFixed(3)} USDT\`
 
-🔽 *Achat :* \`${buyExchange}\` @ $${buyPrice.toFixed(4)}
-🔼 *Vente :* \`${sellExchange}\` @ $${sellPrice.toFixed(4)}
+🔽 *Achat :* \`${buyExchange}\` @ $${fmtPrice(buyPrice)}
+🔼 *Vente :* \`${sellExchange}\` @ $${fmtPrice(sellPrice)}
 📦 *Quantité :* \`${amount.toFixed(6)} ${base}\`
 ${CONFIG.DRY_RUN ? '\n⚠️ _MODE SIMULATION — pas de vrai trade_' : ''}`);
 
@@ -341,18 +355,35 @@ ${CONFIG.DRY_RUN ? '\n⚠️ _MODE SIMULATION — pas de vrai trade_' : ''}`);
       const sellOrder = sellResult.value;
       const elapsed = Date.now() - startTime;
 
-      const realBuyPrice  = buyOrder.average  || buyPrice;
-      const realSellPrice = sellOrder.average || sellPrice;
-      const realPnL = (realSellPrice - realBuyPrice) * amount - feeCost;
+      // Prix moyen réel d'exécution : on préfère `average`, sinon on le
+      // recalcule depuis cost/filled (souvent plus fiable sur les ordres
+      // marché), et seulement en dernier recours on retombe sur le prix du
+      // ticker d'avant-trade (qui peut être périmé sur un actif peu liquide
+      // et fausser le PnL affiché).
+      const realBuyPrice  = buyOrder.average  || (buyOrder.cost  && buyOrder.filled  ? buyOrder.cost  / buyOrder.filled  : buyPrice);
+      const realSellPrice = sellOrder.average || (sellOrder.cost && sellOrder.filled ? sellOrder.cost / sellOrder.filled : sellPrice);
+
+      // Si les deux jambes n'ont pas rempli exactement la même quantité
+      // (précision/arrondi différents selon l'exchange), on ne compte comme
+      // "matché" que la plus petite des deux — le reste est un excédent non
+      // arbitragé (pas une perte en soi, mais pas du profit non plus).
+      const buyFilled  = buyOrder.filled  || amount;
+      const sellFilled = sellOrder.filled || amount;
+      const matchedAmount = Math.min(buyFilled, sellFilled);
+      if (Math.abs(buyFilled - sellFilled) / amount > 0.01) {
+        console.log(`⚠ Quantités remplies différentes: achat ${buyFilled} vs vente ${sellFilled} (attendu ${amount})`);
+      }
+
+      const realPnL = (realSellPrice - realBuyPrice) * matchedAmount - feeCost;
 
       if (CONFIG.DRY_RUN) {
         const b = symbol.split('/')[0];
         if (!state.balances[buyExchange])  state.balances[buyExchange]  = { USDT: capitalFor(buyExchange),  free: {} };
         if (!state.balances[sellExchange]) state.balances[sellExchange] = { USDT: capitalFor(sellExchange), free: {} };
         state.balances[buyExchange].USDT -= capital;
-        state.balances[buyExchange].free[b] = (state.balances[buyExchange].free[b] || 0) + amount;
-        state.balances[sellExchange].free[b] = Math.max(0, (state.balances[sellExchange].free[b] || 0) - amount);
-        state.balances[sellExchange].USDT += (amount * realSellPrice) - feeCost / 2;
+        state.balances[buyExchange].free[b] = (state.balances[buyExchange].free[b] || 0) + matchedAmount;
+        state.balances[sellExchange].free[b] = Math.max(0, (state.balances[sellExchange].free[b] || 0) - matchedAmount);
+        state.balances[sellExchange].USDT += (matchedAmount * realSellPrice) - feeCost / 2;
       }
 
       state.totalPnL += realPnL;
@@ -360,7 +391,7 @@ ${CONFIG.DRY_RUN ? '\n⚠️ _MODE SIMULATION — pas de vrai trade_' : ''}`);
 
       const trade = {
         id: tradeId, symbol, buyExchange, sellExchange,
-        buyPrice: realBuyPrice, sellPrice: realSellPrice, amount, spreadPct,
+        buyPrice: realBuyPrice, sellPrice: realSellPrice, amount: matchedAmount, spreadPct,
         pnl: realPnL, feeCost,
         buyOrderId:  buyOrder.id,
         sellOrderId: sellOrder.id,
@@ -374,13 +405,15 @@ ${CONFIG.DRY_RUN ? '\n⚠️ _MODE SIMULATION — pas de vrai trade_' : ''}`);
       await tg(`✅ *TRADE RÉUSSI* \`${tradeId}\`
 
 💎 *Paire :* \`${symbol}\`
-💰 *PnL net :* \`+${realPnL.toFixed(4)} USDT\`
-📊 *PnL total :* \`+${state.totalPnL.toFixed(4)} USDT\`
+💰 *PnL net (estimé) :* \`+${realPnL.toFixed(4)} USDT\`
+📊 *PnL total (cette session) :* \`+${state.totalPnL.toFixed(4)} USDT\`
 ⏱ *Durée :* \`${elapsed}ms\`
 
-🔽 *Acheté :* ${amount.toFixed(6)} @ $${realBuyPrice.toFixed(4)} sur \`${buyExchange}\`
-🔼 *Vendu :* ${amount.toFixed(6)} @ $${realSellPrice.toFixed(4)} sur \`${sellExchange}\`
-📋 *Trades :* ${state.successTrades}✅ / ${state.failedTrades}❌`);
+🔽 *Acheté :* ${buyFilled.toFixed(6)} @ $${fmtPrice(realBuyPrice)} sur \`${buyExchange}\`
+🔼 *Vendu :* ${sellFilled.toFixed(6)} @ $${fmtPrice(realSellPrice)} sur \`${sellExchange}\`
+📋 *Trades :* ${state.successTrades}✅ / ${state.failedTrades}❌
+
+_⚠️ PnL calculé à partir des prix retournés par l'exchange — vérifie toujours tes soldes réels, un actif peu liquide peut remplir à un prix différent de ce qui est affiché ici._`);
 
       return trade;
     }
@@ -574,6 +607,20 @@ async function start(dynamicConfig = {}) {
   const mySession = currentSession;
   state.running = false;
   await new Promise(r => setTimeout(r, 500)); // laisse le temps à une éventuelle boucle en cours de voir le changement
+
+  // Par défaut, chaque démarrage EXPLICITE (depuis le site) repart de zéro sur
+  // les compteurs (PnL total, trades) — sinon "PnL total" mélange les anciennes
+  // sessions de test avec la nouvelle et devient trompeur. Le redémarrage
+  // AUTOMATIQUE après un reboot serveur passe resetStats:false pour garder la
+  // continuité (voir server.js).
+  if (dynamicConfig.resetStats !== false) {
+    state.totalPnL      = 0;
+    state.totalTrades   = 0;
+    state.successTrades = 0;
+    state.failedTrades  = 0;
+    state.tradeHistory  = [];
+    console.log('🔄 Compteurs remis à zéro pour cette nouvelle session');
+  }
 
   if (!dynamicConfig.exchange1 || !dynamicConfig.exchange2) {
     throw new Error('Deux exchanges doivent être sélectionnés (exchange1 et exchange2)');

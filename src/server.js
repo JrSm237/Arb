@@ -280,7 +280,7 @@ app.listen(PORT, async () => {
   if (savedConfig && savedConfig.autoRestart) {
     console.log('🔄 Redémarrage automatique du bot...');
     try {
-      await tradeBot.start(savedConfig);
+      await tradeBot.start({ ...savedConfig, resetStats: false });
       console.log(`✅ Bot relancé automatiquement sur ${savedConfig.pair || 'multi-paires'}`);
 
       await sendTelegram(`🔄 *ArbiScan Bot — Redémarrage automatique*
