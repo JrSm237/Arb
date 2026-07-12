@@ -188,6 +188,20 @@ footer{padding:16px 24px;border-top:1px solid var(--border);font-size:.67rem;col
       </div>
 
       <div id="botPairInfo" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:7px;padding:10px 14px;font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-bottom:12px;line-height:1.8"></div>
+
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:7px;padding:11px 14px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div>
+          <div style="font-family:var(--mono);font-size:.76rem;font-weight:700">🔁 Rééquilibrage automatique</div>
+          <div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-top:3px;line-height:1.6">Si un exchange manque de USDT ou de la crypto pour trader, convertit localement (ordre de marché sur place, pas de transfert). Ajoute des frais supplémentaires.</div>
+        </div>
+        <label style="position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0">
+          <input type="checkbox" id="botAutoRebalance" style="opacity:0;width:0;height:0">
+          <span onclick="const cb=document.getElementById('botAutoRebalance');cb.checked=!cb.checked;this.style.background=cb.checked?'var(--green)':'var(--border)';this.firstElementChild.style.transform=cb.checked?'translateX(18px)':'translateX(0)'" style="position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:24px;transition:.2s">
+            <span style="position:absolute;height:18px;width:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s"></span>
+          </span>
+        </label>
+      </div>
+
       <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
         <span style="font-family:var(--mono);font-size:.72rem;color:var(--muted)">Capital total engagé</span>
         <span style="font-family:var(--mono);font-size:.92rem;font-weight:700;color:var(--green)" id="botCapTotal">20 USDT</span>
@@ -433,6 +447,7 @@ async function botLaunch() {
   const cap2   =parseFloat(document.getElementById('botCap2')?.value)||10;
   const spread =parseFloat(document.getElementById('botSpread')?.value)||2.0;
   const dryRun =document.getElementById('botDryRun')?.value==='true';
+  const autoRebalance = document.getElementById('botAutoRebalance')?.checked || false;
   const msgEl  =document.getElementById('botLaunchMsg');
   if(!/^[A-Z0-9]+\/USDT$/.test(pair)) { msgEl.style.color='var(--orange)'; msgEl.textContent='⚠ Paire invalide'; return; }
   const adminKey = getAdminKey();
@@ -440,7 +455,7 @@ async function botLaunch() {
   msgEl.style.color='var(--muted)'; msgEl.textContent=`⏳ Démarrage sur ${pair}…`;
   try {
     const r=await fetch('/api/bot/start',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({adminKey,pair,exchange1:botSelExchanges[0],exchange2:botSelExchanges[1],apiConfigs:botConnAPIs,capital1:cap1,capital2:cap2,minSpreadPct:spread,dryRun})});
+      body:JSON.stringify({adminKey,pair,exchange1:botSelExchanges[0],exchange2:botSelExchanges[1],apiConfigs:botConnAPIs,capital1:cap1,capital2:cap2,minSpreadPct:spread,dryRun,autoRebalance})});
     const d=await r.json();
     msgEl.style.color=d.success?'var(--green)':'var(--orange)'; msgEl.textContent=d.message||d.error;
     if(d.success) setTimeout(loadBotStatus,2000);
