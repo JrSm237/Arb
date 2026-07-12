@@ -1,8 +1,10 @@
-# ArbiScan — Scanner d'arbitrage crypto + bot de trading
+# ArbiScan Bot — Bot de trading d'arbitrage crypto
 
-Scanner d'arbitrage en temps réel sur des milliers de paires USDT, 10 exchanges (lecture publique
-via CCXT), avec un bot de trading automatique configurable sur **2 exchanges au choix**, des
-alertes Telegram, et des commandes Telegram pour tout contrôler à distance.
+Bot de trading automatique configurable sur **2 exchanges au choix parmi 4** (Bybit, MEXC, HTX,
+KuCoin), avec alertes Telegram et commandes Telegram pour tout contrôler à distance.
+
+Version allégée : la partie "scanner de signaux" a été retirée pour ne garder que le bot de
+trading — plus léger en RAM, plus stable, et c'est la seule partie qui compte vraiment.
 
 Ce projet ne contient **aucun système de compte, d'abonnement ou de paiement** : c'est un outil
 personnel, à usage privé (le tien).
@@ -11,7 +13,7 @@ personnel, à usage privé (le tien).
 - **Backend** : Node.js + Express + CCXT
 - **Frontend** : HTML/CSS/JS vanilla (aucun framework)
 - **Alertes & Commandes** : Telegram Bot API (webhook)
-- **Déploiement** : n'importe quel hébergeur Node (Render, Railway, VPS…)
+- **Déploiement** : n'importe quel hébergeur Node (Render, AWS Lightsail, VPS…)
 
 ## Structure du projet
 ```
@@ -19,15 +21,15 @@ arbiscan/
 ├── package.json
 ├── .env.example          ← Copier en .env et remplir
 ├── README.md
+├── deploy/
+│   └── lightsail-setup.sh ← Script de déploiement AWS Lightsail
 ├── public/
-│   └── index.html        ← Site complet (Signaux + Alertes + Bot)
+│   └── index.html         ← Site (uniquement le panneau Bot Trading)
 └── src/
-    ├── server.js         ← Serveur Express + routes API
-    ├── tradeBot.js        ← Bot d'exécution d'arbitrage (2 exchanges dynamiques)
-    ├── telegramBot.js     ← Commandes Telegram + keep-alive
-    ├── telegram.js        ← Envoi d'alertes Telegram
-    ├── autoScanner.js     ← Scanner automatique en arrière-plan
-    └── pairs.js           ← Liste des paires USDT
+    ├── server.js          ← Serveur Express + routes API bot
+    ├── tradeBot.js         ← Bot d'exécution d'arbitrage (2 exchanges dynamiques)
+    ├── telegramBot.js      ← Commandes Telegram + keep-alive
+    └── telegram.js         ← Envoi de messages Telegram
 ```
 
 ## Installation locale
@@ -48,25 +50,17 @@ npm start
 | `ADMIN_KEY` | **Oui** | Protège le démarrage/arrêt du bot (argent réel). Sans elle, ces routes sont bloquées. |
 | `APP_URL` | Recommandé | URL publique de ton app (keep-alive + webhook Telegram) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Optionnel | Active les alertes et commandes Telegram |
-| `ALERT_SPREAD` | Optionnel | Seuil de spread (%) pour déclencher une alerte (défaut 2.0) |
-| `SCAN_INTERVAL` | Optionnel | Intervalle du scanner automatique en ms (défaut 60000) |
 
 Les **clés API des exchanges** (pour le bot de trading) ne vont pas dans `.env` : elles se
-saisissent directement sur le site, à l'étape 2 du panneau "Bot Trading".
+saisissent directement sur le site, à l'étape 2 du panneau bot.
 
 ## Fonctionnalités
 
-### ⬡ Scanner de signaux
-- Des milliers de paires USDT surveillées sur 10 exchanges
-- Scan rapide (Top 30-500 paires) ou scan complet
-- Auto-scan toutes les 60s en arrière-plan
-- Alertes Telegram automatiques si spread > seuil
-
 ### 🤖 Bot de trading
 Configuration entièrement depuis le site, en 3 étapes :
-1. **Choisir 2 exchanges** parmi 8 disponibles (OKX, HTX, Binance, Bybit, KuCoin, MEXC, Gate.io, Bitget)
-2. **Entrer les clés API** de ces 2 exchanges + tester la connexion (solde affiché) — protégé par la
-   clé admin (`ADMIN_KEY`)
+1. **Choisir 2 exchanges** parmi 4 disponibles (Bybit, MEXC, HTX, KuCoin)
+2. **Entrer les clés API** de ces 2 exchanges + tester la connexion (solde affiché) — protégé par
+   la clé admin (`ADMIN_KEY`)
 3. **Choisir la paire, le capital par exchange, le spread minimum, le mode** (Simulation 🧪 ou
    Production 💰) puis démarrer
 
@@ -85,7 +79,6 @@ si le serveur redémarre, le bot repart automatiquement avec la même config.
 | `/start_bot` | Relancer le bot (dernière config sauvegardée) |
 | `/stop_bot` | Arrêter le bot |
 | `/rapport` | Rapport complet |
-| `/scan` | Scan rapide Top 30 |
 | `/ping` | Vérifier que le serveur tourne |
 | `/keepalive_on` / `/keepalive_off` | Ping auto toutes les 13 min (utile sur un hébergement gratuit qui met en veille) |
 
@@ -93,16 +86,13 @@ si le serveur redémarre, le bot repart automatiquement avec la même config.
 
 | Route | Méthode | Auth | Description |
 |---|---|---|---|
-| `/api/scan` | POST | — | Scan rapide de signaux |
-| `/api/scan/full` | POST | — | Scan complet |
-| `/api/status` | GET | — | Statut scanner + derniers signaux |
+| `/api/exchanges` | GET | — | Liste des 4 exchanges supportés |
 | `/api/bot/status` | GET | — | État bot (PnL, trades, balances) — lecture seule |
 | `/api/bot/test-connections` | POST | `ADMIN_KEY` | Tester des clés API exchange |
 | `/api/bot/start` | POST | `ADMIN_KEY` | Démarrer le bot |
 | `/api/bot/stop` | POST | `ADMIN_KEY` | Arrêter le bot |
 | `/api/bot/report` | POST | `ADMIN_KEY` | Envoyer un rapport Telegram |
 | `/api/bot/keepalive` | GET/POST | `ADMIN_KEY` (POST) | Statut / contrôle du keep-alive |
-| `/api/alert/test` | POST | — | Test alerte Telegram |
 | `/telegram-webhook` | POST | — | Webhook pour les commandes Telegram |
 
 ## ⚠️ Avertissement
@@ -111,12 +101,12 @@ capital (slippage, latence, retraits d'ordres, pannes d'exchange...). Teste touj
 **Simulation** avant de passer en **Production**, et ne mets que des montants que tu peux te
 permettre de perdre.
 
-## Mémoire / hébergement
-Le scanner interroge en parallèle plusieurs exchanges via CCXT, qui garde en mémoire la liste
-complète des marchés de chaque exchange (plusieurs Mo chacun). Sur une instance à RAM très limitée
-(ex: petits plans gratuits ~512 Mo), le cumul scanner automatique + scan manuel + bot de trading
-peut faire planter le process avec une erreur `JavaScript heap out of memory`. Si ça arrive :
-- Réduis `AUTO_SCAN_PAIRS` dans `.env` (ex: 15-20)
-- Évite de laisser tourner en même temps le scan automatique client ("Auto-scan 30s") ET le
-  scanner serveur (déjà actif en permanence) ET le bot de trading
-- Si le problème persiste, passe sur un plan avec plus de RAM (1 Go recommandé)
+## Déploiement sur AWS Lightsail
+Un script prêt à l'emploi est fourni dans `deploy/lightsail-setup.sh` : installation de Node.js,
+PM2 (garde le process actif + redémarre automatiquement s'il dépasse 900 Mo de RAM ou après un
+reboot), installation des dépendances et démarrage. Envoie d'abord le dossier du projet sur le
+serveur via WinSCP (SFTP, port 22), puis en SSH :
+```bash
+chmod +x deploy/lightsail-setup.sh
+./deploy/lightsail-setup.sh
+```
