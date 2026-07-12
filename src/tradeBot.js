@@ -1,5 +1,10 @@
-// ── BOT D'EXÉCUTION AUTOMATIQUE D'ARBITRAGE ──────────────────────────────────
+// ── BOT DE TRADING CROSS-EXCHANGE — GESTION AUTONOME EN USDT ─────────────────
 // 2 exchanges au choix (parmi ceux supportés par CCXT) — Spot uniquement
+// Tu déposes uniquement de l'USDT des deux côtés. Le bot achète quand un
+// exchange est nettement moins cher que l'autre, puis revend sur ce MÊME
+// exchange dès que ça devient profitable (ou pour couper une perte). Jamais
+// deux ordres simultanés sur deux exchanges différents — donc jamais de
+// risque d'exécution partielle (une jambe qui passe, l'autre qui échoue).
 // Sécurité : les clés API ne doivent JAMAIS avoir le droit "Withdraw"
 
 require('dotenv').config();
@@ -10,30 +15,25 @@ const TELEGRAM_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const CONFIG = {
-  MIN_SPREAD_PCT: parseFloat(process.env.MIN_SPREAD_PCT || '2.0'),
+  MIN_SPREAD_PCT: parseFloat(process.env.MIN_SPREAD_PCT || '2.0'), // seuil pour ACHETER (écart entre exchanges) ET pour VENDRE (gain net visé)
+  STOP_LOSS_PCT:  parseFloat(process.env.STOP_LOSS_PCT  || '5.0'), // coupe la position si elle perd plus que ça
   SELECTED_PAIR:  null,
-  EXCHANGE_1:     null,   // ex: 'okx'   — choisi dynamiquement depuis le site
-  EXCHANGE_2:     null,   // ex: 'htx'
+  EXCHANGE_1:     null,   // ex: 'kucoin' — choisi dynamiquement depuis le site
+  EXCHANGE_2:     null,   // ex: 'bybit'
   CAPITAL_1:      parseFloat(process.env.CAPITAL_PER_LEG || '10'),
   CAPITAL_2:      parseFloat(process.env.CAPITAL_PER_LEG || '10'),
   FEE_PCT:        0.1,
   SCAN_INTERVAL:  15000,
-  ORDER_TIMEOUT:  10000,
-  MAX_SLIPPAGE:   0.3,
   DRY_RUN:        process.env.DRY_RUN !== 'false',
-  AUTO_REBALANCE: false, // conversion locale USDT<->token sur l'exchange à sec, avant le trade
 };
 
 // ── EXCHANGES (construits dynamiquement selon la sélection utilisateur) ──────
-// Instances PUBLIQUES pour fetch des prix (pas besoin de clés)
-const publicExchanges = {};
-// Instances PRIVÉES pour passer les ordres / lire les balances (clés requises)
-const privateExchanges = {};
+const publicExchanges  = {}; // instances PUBLIQUES pour fetch des prix (pas besoin de clés)
+const privateExchanges = {}; // instances PRIVÉES pour passer les ordres / lire les balances
 
 // Compteur de session : incrémenté à chaque start()/stop(). Toute boucle de
 // scan lancée par une session précédente se compare à ce compteur et s'arrête
-// d'elle-même dès qu'il change — ça évite d'avoir plusieurs boucles de scan
-// qui tournent en parallèle si le bot est redémarré plusieurs fois.
+// d'elle-même dès qu'il change — évite d'avoir plusieurs boucles en parallèle.
 let currentSession = 0;
 
 function ensurePublicExchange(id) {
@@ -63,16 +63,6 @@ function capitalFor(exchangeId) {
   return 10;
 }
 
-// ── PAIRES PRIORITAIRES (celles qui ont montré des spreads) ───────────────────
-const PRIORITY_PAIRS = [
-  'BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT',
-  'DOGE/USDT','ADA/USDT','AVAX/USDT','LINK/USDT','DOT/USDT',
-  'MATIC/USDT','LTC/USDT','UNI/USDT','ATOM/USDT','BCH/USDT',
-  'GMX/USDT','RUNE/USDT','INJ/USDT','WIF/USDT','PEPE/USDT',
-  'BONK/USDT','ARB/USDT','OP/USDT','TIA/USDT','SUI/USDT',
-  'SEI/USDT','FTM/USDT','NEAR/USDT','APT/USDT','TON/USDT',
-];
-
 // ── ÉTAT DU BOT ───────────────────────────────────────────────────────────────
 const state = {
   running:       false,
@@ -82,7 +72,8 @@ const state = {
   totalPnL:      0,
   balances:      {},
   lastScan:      null,
-  activeTrade:   null,
+  activeTrade:   null, // verrou anti-chevauchement pendant qu'un ordre est en vol
+  position:      null, // { exchange, quantity, entryPrice, entryCost, entryTime } — null si pas de position ouverte
   tradeHistory:  [],
 };
 
@@ -91,7 +82,7 @@ function fmtPrice(p) {
   if (!p || p === 0) return '0';
   if (p >= 1)     return p.toFixed(4);
   if (p >= 0.01)  return p.toFixed(6);
-  return p.toPrecision(4); // ex: 0.000003842 → "0.000003842" reste lisible
+  return p.toPrecision(4);
 }
 
 // ── TELEGRAM ──────────────────────────────────────────────────────────────────
@@ -136,7 +127,7 @@ async function fetchTicker(exchangeId, symbol) {
   }
 }
 
-// ── FETCH BALANCES ────────────────────────────────────────────────────────────
+// ── FETCH BALANCES (USDT + token détenu, sur les 2 exchanges) ───────────────
 async function fetchBalances() {
   const ids = [...new Set([CONFIG.EXCHANGE_1, CONFIG.EXCHANGE_2].filter(Boolean))];
 
@@ -145,7 +136,6 @@ async function fetchBalances() {
       const ex = privateExchanges[id];
 
       if (!ex) {
-        // Pas de clés API configurées : balances simulées (mode simulation)
         state.balances[id] = {
           USDT:      CONFIG.DRY_RUN ? capitalFor(id) : 0,
           total:     {},
@@ -155,8 +145,6 @@ async function fetchBalances() {
         continue;
       }
 
-      // Timeout dur (15s) en plus du timeout interne de ccxt : évite qu'un
-      // exchange qui ne répond pas bloque indéfiniment le démarrage du bot.
       const bal = await Promise.race([
         ex.fetchBalance(),
         new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout (15s) en attente de ${id}`)), 15000)),
@@ -174,70 +162,7 @@ async function fetchBalances() {
   return state.balances;
 }
 
-// ── RÉÉQUILIBRAGE LOCAL (USDT <-> TOKEN, SUR LE MÊME EXCHANGE) ───────────────
-// Si l'exchange d'achat manque d'USDT, ou l'exchange de vente manque du token
-// à vendre, on tente une conversion LOCALE (un ordre de marché sur ce même
-// exchange, pas de transfert entre exchanges) en utilisant l'autre actif déjà
-// présent là-bas. Ne change rien si AUTO_REBALANCE est désactivé.
-async function rebalanceIfNeeded(buyExchange, sellExchange, symbol, buyPrice) {
-  if (!CONFIG.AUTO_REBALANCE || CONFIG.DRY_RUN) return { ok: true }; // en simulation, hasEnoughFunds() valide déjà tout
-
-  const base         = symbol.split('/')[0];
-  const buyerCapital = capitalFor(buyExchange);
-  const neededToken  = buyerCapital / buyPrice;
-
-  const buyerUSDT   = state.balances[buyExchange]?.USDT || 0;
-  const sellerToken = state.balances[sellExchange]?.free?.[base] || 0;
-
-  // 1) L'exchange d'ACHAT manque d'USDT → vendre un peu de son stock de `base` pour en récupérer
-  if (buyerUSDT < buyerCapital) {
-    const shortfallUSDT = buyerCapital - buyerUSDT;
-    const buyerToken    = state.balances[buyExchange]?.free?.[base] || 0;
-    const idealSell     = (shortfallUSDT / buyPrice) * 1.005; // +0.5% marge (frais/slippage)
-    // Sur un petit capital, exiger la marge complète peut faire échouer inutilement
-    // le rééquilibrage même quand on a "presque" assez. On vend au maximum ce qui
-    // est dispo, avec un minimum de marge de sécurité (0.2%) pour ne pas vider le compte.
-    const tokenToSell = Math.min(idealSell, buyerToken * 0.998);
-    if (tokenToSell <= 0 || buyerToken < (shortfallUSDT / buyPrice) * 1.001) {
-      return { ok: false, reason: `${buyExchange}: pas assez de ${base} pour se reconvertir en USDT (besoin ~${(shortfallUSDT/buyPrice).toFixed(6)}, dispo ${buyerToken.toFixed(6)})` };
-    }
-    try {
-      console.log(`🔁 Rééquilibrage ${buyExchange}: vente de ${tokenToSell.toFixed(6)} ${base} → USDT`);
-      await placeMarketOrder(buyExchange, symbol, 'sell', tokenToSell);
-      await tg(`🔁 *Rééquilibrage local* sur \`${buyExchange}\`\nVente de ${tokenToSell.toFixed(6)} ${base} → USDT (avant trade d'arbitrage)`);
-    } catch (e) {
-      return { ok: false, reason: `Rééquilibrage ${buyExchange} échoué: ${e.message}` };
-    }
-  }
-
-  // 2) L'exchange de VENTE manque du token `base` → acheter le manque avec son stock d'USDT
-  if (sellerToken < neededToken) {
-    const shortfallToken = neededToken - sellerToken;
-    const sellerUSDT      = state.balances[sellExchange]?.USDT || 0;
-    const idealUsdt        = (shortfallToken * buyPrice) * 1.005; // +0.5% marge
-    const usdtToUse        = Math.min(idealUsdt, sellerUSDT * 0.998);
-    if (usdtToUse <= 0 || sellerUSDT < (shortfallToken * buyPrice) * 1.001) {
-      return { ok: false, reason: `${sellExchange}: pas assez d'USDT pour racheter du ${base} (besoin ~${(shortfallToken*buyPrice).toFixed(2)}, dispo ${sellerUSDT.toFixed(2)})` };
-    }
-    const amountToBuy = usdtToUse / buyPrice;
-    try {
-      console.log(`🔁 Rééquilibrage ${sellExchange}: achat de ${amountToBuy.toFixed(6)} ${base} avec USDT`);
-      await placeMarketOrder(sellExchange, symbol, 'buy', amountToBuy);
-      await tg(`🔁 *Rééquilibrage local* sur \`${sellExchange}\`\nAchat de ${amountToBuy.toFixed(6)} ${base} avec USDT (avant trade d'arbitrage)`);
-    } catch (e) {
-      return { ok: false, reason: `Rééquilibrage ${sellExchange} échoué: ${e.message}` };
-    }
-  }
-
-  // Rafraîchir les balances après conversion, avant de lancer le vrai trade d'arbitrage
-  await fetchBalances();
-  return { ok: true };
-}
-
 // ── VÉRIFIER LES MINIMUMS D'ORDRE DE L'EXCHANGE ──────────────────────────────
-// Chaque exchange refuse les ordres trop petits (valeur ou quantité en dessous
-// d'un seuil). On vérifie AVANT d'envoyer l'ordre pour éviter un rejet en
-// pleine exécution (dangereux si l'autre jambe, elle, est déjà passée).
 function getOrderMinimum(exchangeId, symbol) {
   try {
     const ex = publicExchanges[exchangeId];
@@ -252,7 +177,7 @@ function getOrderMinimum(exchangeId, symbol) {
 
 function orderMeetsMinimum(exchangeId, symbol, amount, price) {
   const lim = getOrderMinimum(exchangeId, symbol);
-  if (!lim) return { ok: true }; // marché pas encore chargé — on ne bloque pas, l'exchange validera lui-même
+  if (!lim) return { ok: true };
   const cost = amount * price;
   if (lim.minAmount && amount < lim.minAmount) {
     return { ok: false, reason: `${exchangeId}: quantité ${amount.toFixed(6)} < minimum ${lim.minAmount}` };
@@ -263,44 +188,14 @@ function orderMeetsMinimum(exchangeId, symbol, amount, price) {
   return { ok: true };
 }
 
-// ── VÉRIFIER QU'ON A ASSEZ DE FONDS ──────────────────────────────────────────
-function hasEnoughFunds(buyExchange, sellExchange, symbol, buyPrice) {
-  // En simulation : toujours autoriser le trade
-  if (CONFIG.DRY_RUN) {
-    return { ok: true, simulated: true };
-  }
-
-  const base         = symbol.split('/')[0];
-  const buyerCapital = capitalFor(buyExchange);
-  const buyerUSDT    = state.balances[buyExchange]?.USDT || 0;
-  const sellerToken  = state.balances[sellExchange]?.free?.[base] || 0;
-  const neededToken  = buyerCapital / buyPrice;
-
-  if (buyerUSDT < buyerCapital) {
-    return { ok: false, reason: `${buyExchange}: USDT insuffisant (${buyerUSDT.toFixed(2)} < ${buyerCapital})` };
-  }
-  if (sellerToken < neededToken) {
-    return { ok: false, reason: `${sellExchange}: ${base} insuffisant (${sellerToken.toFixed(6)} < ${neededToken.toFixed(6)})` };
-  }
-  return { ok: true };
-}
-
 // ── PLACER UN ORDRE MARKET ────────────────────────────────────────────────────
 async function placeMarketOrder(exchangeId, symbol, side, amount) {
   if (CONFIG.DRY_RUN) {
     console.log(`[SIM] ${side.toUpperCase()} ${amount.toFixed(6)} ${symbol} on ${exchangeId}`);
-    return {
-      id:        'sim-' + Date.now(),
-      status:    'closed',
-      filled:    amount,
-      average:   0, // remplacé par buyPrice/sellPrice réels dans executeTrade
-      simulated: true,
-    };
+    return { id: 'sim-' + Date.now(), status: 'closed', filled: amount, average: null, simulated: true };
   }
-
   const ex = privateExchanges[exchangeId];
   if (!ex) throw new Error(`Pas de clé API configurée pour ${exchangeId}`);
-
   try {
     return await ex.createMarketOrder(symbol, side, amount);
   } catch (e) {
@@ -308,196 +203,7 @@ async function placeMarketOrder(exchangeId, symbol, side, amount) {
   }
 }
 
-// ── EXÉCUTER UN TRADE D'ARBITRAGE ────────────────────────────────────────────
-async function executeTrade(opp) {
-  if (state.activeTrade) {
-    console.log('Trade déjà en cours, on attend...');
-    return;
-  }
-
-  state.activeTrade = opp;
-  state.totalTrades++;
-
-  const { symbol, buyExchange, sellExchange, buyPrice, sellPrice, spreadPct } = opp;
-  const base     = symbol.split('/')[0];
-  const capital  = capitalFor(buyExchange);
-  const amount   = capital / buyPrice;
-  const feeCost  = capital * (CONFIG.FEE_PCT / 100) * 2; // 2 legs
-  const grossPnL = amount * (sellPrice - buyPrice);
-  const netPnL   = grossPnL - feeCost;
-
-  const tradeId   = `T${Date.now()}`;
-  const startTime = Date.now();
-
-  await tg(`🔄 *TRADE EN COURS* \`${tradeId}\`
-
-💎 *Paire :* \`${symbol}\`
-📈 *Spread :* \`+${spreadPct.toFixed(2)}%\`
-💰 *PnL estimé :* \`+${netPnL.toFixed(3)} USDT\`
-
-🔽 *Achat :* \`${buyExchange}\` @ $${fmtPrice(buyPrice)}
-🔼 *Vente :* \`${sellExchange}\` @ $${fmtPrice(sellPrice)}
-📦 *Quantité :* \`${amount.toFixed(6)} ${base}\`
-${CONFIG.DRY_RUN ? '\n⚠️ _MODE SIMULATION — pas de vrai trade_' : ''}`);
-
-  try {
-    const [buyResult, sellResult] = await Promise.allSettled([
-      placeMarketOrder(buyExchange,  symbol, 'buy',  amount),
-      placeMarketOrder(sellExchange, symbol, 'sell', amount),
-    ]);
-
-    const buyOk  = buyResult.status  === 'fulfilled';
-    const sellOk = sellResult.status === 'fulfilled';
-
-    // ── CAS 1 : LES DEUX JAMBES ONT RÉUSSI ──────────────────────────────────
-    if (buyOk && sellOk) {
-      const buyOrder  = buyResult.value;
-      const sellOrder = sellResult.value;
-      const elapsed = Date.now() - startTime;
-
-      // Prix moyen réel d'exécution : on préfère `average`, sinon on le
-      // recalcule depuis cost/filled (souvent plus fiable sur les ordres
-      // marché), et seulement en dernier recours on retombe sur le prix du
-      // ticker d'avant-trade (qui peut être périmé sur un actif peu liquide
-      // et fausser le PnL affiché).
-      const realBuyPrice  = buyOrder.average  || (buyOrder.cost  && buyOrder.filled  ? buyOrder.cost  / buyOrder.filled  : buyPrice);
-      const realSellPrice = sellOrder.average || (sellOrder.cost && sellOrder.filled ? sellOrder.cost / sellOrder.filled : sellPrice);
-
-      // Si les deux jambes n'ont pas rempli exactement la même quantité
-      // (précision/arrondi différents selon l'exchange), on ne compte comme
-      // "matché" que la plus petite des deux — le reste est un excédent non
-      // arbitragé (pas une perte en soi, mais pas du profit non plus).
-      const buyFilled  = buyOrder.filled  || amount;
-      const sellFilled = sellOrder.filled || amount;
-      const matchedAmount = Math.min(buyFilled, sellFilled);
-      if (Math.abs(buyFilled - sellFilled) / amount > 0.01) {
-        console.log(`⚠ Quantités remplies différentes: achat ${buyFilled} vs vente ${sellFilled} (attendu ${amount})`);
-      }
-
-      const realPnL = (realSellPrice - realBuyPrice) * matchedAmount - feeCost;
-
-      if (CONFIG.DRY_RUN) {
-        const b = symbol.split('/')[0];
-        if (!state.balances[buyExchange])  state.balances[buyExchange]  = { USDT: capitalFor(buyExchange),  free: {} };
-        if (!state.balances[sellExchange]) state.balances[sellExchange] = { USDT: capitalFor(sellExchange), free: {} };
-        state.balances[buyExchange].USDT -= capital;
-        state.balances[buyExchange].free[b] = (state.balances[buyExchange].free[b] || 0) + matchedAmount;
-        state.balances[sellExchange].free[b] = Math.max(0, (state.balances[sellExchange].free[b] || 0) - matchedAmount);
-        state.balances[sellExchange].USDT += (matchedAmount * realSellPrice) - feeCost / 2;
-      }
-
-      state.totalPnL += realPnL;
-      state.successTrades++;
-
-      const trade = {
-        id: tradeId, symbol, buyExchange, sellExchange,
-        buyPrice: realBuyPrice, sellPrice: realSellPrice, amount: matchedAmount, spreadPct,
-        pnl: realPnL, feeCost,
-        buyOrderId:  buyOrder.id,
-        sellOrderId: sellOrder.id,
-        duration:    elapsed,
-        timestamp:   new Date().toISOString(),
-        status:      'success',
-      };
-      state.tradeHistory.unshift(trade);
-      if (state.tradeHistory.length > 100) state.tradeHistory.pop();
-
-      await tg(`✅ *TRADE RÉUSSI* \`${tradeId}\`
-
-💎 *Paire :* \`${symbol}\`
-💰 *PnL net (estimé) :* \`+${realPnL.toFixed(4)} USDT\`
-📊 *PnL total (cette session) :* \`+${state.totalPnL.toFixed(4)} USDT\`
-⏱ *Durée :* \`${elapsed}ms\`
-
-🔽 *Acheté :* ${buyFilled.toFixed(6)} @ $${fmtPrice(realBuyPrice)} sur \`${buyExchange}\`
-🔼 *Vendu :* ${sellFilled.toFixed(6)} @ $${fmtPrice(realSellPrice)} sur \`${sellExchange}\`
-📋 *Trades :* ${state.successTrades}✅ / ${state.failedTrades}❌
-
-_⚠️ PnL calculé à partir des prix retournés par l'exchange — vérifie toujours tes soldes réels, un actif peu liquide peut remplir à un prix différent de ce qui est affiché ici._`);
-
-      return trade;
-    }
-
-    // ── CAS 2 : EXÉCUTION PARTIELLE — UNE SEULE JAMBE EST PASSÉE ────────────
-    // C'est la situation la plus dangereuse : de l'argent/des tokens ont
-    // réellement bougé sur UN exchange, mais pas sur l'autre. Le bot n'a
-    // aucun moyen d'annuler un ordre au marché déjà exécuté. On arrête le
-    // bot automatiquement plutôt que de répéter l'erreur en boucle, et on
-    // alerte immédiatement pour une intervention manuelle.
-    if (buyOk !== sellOk) {
-      state.failedTrades++;
-      const filledSide = buyOk ? 'ACHAT' : 'VENTE';
-      const filledEx   = buyOk ? buyExchange : sellExchange;
-      const failedEx   = buyOk ? sellExchange : buyExchange;
-      const filledOrder = buyOk ? buyResult.value : sellResult.value;
-      const failReason  = (buyOk ? sellResult.reason : buyResult.reason)?.message || 'Erreur inconnue';
-
-      state.running = false; // pause automatique du bot
-
-      const trade = {
-        id: tradeId, symbol, buyExchange, sellExchange, spreadPct,
-        pnl: 0, status: 'partial',
-        error: `Exécution partielle : ${filledSide} exécuté sur ${filledEx} (${(filledOrder?.filled||amount).toFixed(6)} ${base}), échec sur ${failedEx} : ${failReason}`,
-        timestamp: new Date().toISOString(),
-      };
-      state.tradeHistory.unshift(trade);
-      if (state.tradeHistory.length > 100) state.tradeHistory.pop();
-
-      await tg(`🚨🚨 *EXÉCUTION PARTIELLE — BOT MIS EN PAUSE* \`${tradeId}\` 🚨🚨
-
-⚠️ Une seule des deux jambes du trade a été exécutée !
-
-💎 *Paire :* \`${symbol}\`
-✅ *${filledSide} exécuté sur* \`${filledEx}\` — ${(filledOrder?.filled||amount).toFixed(6)} ${base}
-❌ *Échec sur* \`${failedEx}\` : ${failReason}
-
-🛑 *Le bot est automatiquement arrêté* pour éviter que ça se reproduise en boucle.
-
-⚠️ *ACTION REQUISE* :
-1. Vérifie tes balances réelles sur ${filledEx} et ${failedEx}
-2. Rééquilibre manuellement si besoin (tu as maintenant plus ou moins de ${base}/USDT que prévu sur ${filledEx})
-3. Relance le bot depuis le site une fois vérifié`);
-
-      await fetchBalances();
-      return trade;
-    }
-
-    // ── CAS 3 : LES DEUX JAMBES ONT ÉCHOUÉ — AUCUNE POSITION OUVERTE ────────
-    throw new Error(`Achat: ${buyResult.reason?.message || 'ok'} | Vente: ${sellResult.reason?.message || 'ok'}`);
-
-  } catch (e) {
-    state.failedTrades++;
-
-    const trade = {
-      id: tradeId, symbol, buyExchange, sellExchange, spreadPct,
-      pnl: 0, error: e.message,
-      timestamp: new Date().toISOString(),
-      status:    'failed',
-    };
-    state.tradeHistory.unshift(trade);
-
-    await tg(`❌ *TRADE ÉCHOUÉ* \`${tradeId}\`
-
-💎 *Paire :* \`${symbol}\`
-⚠️ *Erreur :* \`${e.message}\`
-📋 *Trades :* ${state.successTrades}✅ / ${state.failedTrades}❌
-
-_Aucune position ouverte — les deux jambes ont échoué, rien n'a bougé._`);
-
-    console.error('Trade failed:', e.message);
-    return trade;
-
-  } finally {
-    state.activeTrade = null;
-    // Rafraîchit toujours les balances après une tentative de trade (succès,
-    // échec ou partiel) — sans ça, les vérifications de fonds du prochain
-    // scan travaillent sur des données périmées.
-    fetchBalances().catch(() => {});
-  }
-}
-
-// Anti-spam : n'alerte sur Telegram qu'une fois toutes les 5 minutes max
-// pour les échecs de rééquilibrage (sinon un scan toutes les 15s peut spammer).
+// Anti-spam Telegram pour les alertes répétitives (fonds insuffisants, etc.)
 let lastFundsAlertTs = 0;
 function shouldAlertFunds() {
   const now = Date.now();
@@ -505,120 +211,232 @@ function shouldAlertFunds() {
   return false;
 }
 
-// ── SCAN ET DÉTECTION D'OPPORTUNITÉS ─────────────────────────────────────────
+// ── ENTRÉE EN POSITION : ACHETER SUR L'EXCHANGE LE MOINS CHER ───────────────
+async function evaluateEntry(symbol) {
+  const [t1, t2] = await Promise.all([
+    fetchTicker(CONFIG.EXCHANGE_1, symbol),
+    fetchTicker(CONFIG.EXCHANGE_2, symbol),
+  ]);
+  if (!t1 || !t2) return;
+
+  const p1 = t1.ask || t1.last;
+  const p2 = t2.ask || t2.last;
+  if (!p1 || !p2) return;
+
+  // Quel exchange est le moins cher ?
+  const cheaper  = p1 <= p2 ? CONFIG.EXCHANGE_1 : CONFIG.EXCHANGE_2;
+  const cheapPrice  = Math.min(p1, p2);
+  const pricePrice  = Math.max(p1, p2);
+  const spreadPct = ((pricePrice - cheapPrice) / cheapPrice) * 100;
+
+  if (spreadPct < CONFIG.MIN_SPREAD_PCT) return; // écart pas assez intéressant pour se positionner
+
+  const capital = capitalFor(cheaper);
+  const amount  = capital / cheapPrice;
+
+  const minCheck = orderMeetsMinimum(cheaper, symbol, amount, cheapPrice);
+  if (!minCheck.ok) {
+    console.log(`⚠ Ordre trop petit: ${minCheck.reason}`);
+    return;
+  }
+
+  const usdtAvail = state.balances[cheaper]?.USDT || (CONFIG.DRY_RUN ? capital : 0);
+  if (usdtAvail < capital) {
+    console.log(`💰 Fonds insuffisants sur ${cheaper}: ${usdtAvail.toFixed(2)} USDT dispo, ${capital} requis`);
+    if (shouldAlertFunds()) {
+      await tg(`💰 *Fonds insuffisants*\n\n\`${cheaper}\` n'a que ${usdtAvail.toFixed(2)} USDT (besoin de ${capital}).\nRecharge cet exchange en USDT pour que le bot puisse continuer.`);
+    }
+    return;
+  }
+
+  if (state.activeTrade) return;
+  state.activeTrade = true;
+
+  try {
+    console.log(`🎯 Entrée: achat sur ${cheaper} @ ${fmtPrice(cheapPrice)} (écart +${spreadPct.toFixed(2)}%)`);
+    const order = await placeMarketOrder(cheaper, symbol, 'buy', amount);
+    const filled     = order.filled  || amount;
+    const entryPrice = order.average || (order.cost && order.filled ? order.cost / order.filled : cheapPrice);
+
+    state.position = {
+      exchange:   cheaper,
+      quantity:   filled,
+      entryPrice,
+      entryCost:  filled * entryPrice,
+      entryTime:  Date.now(),
+      symbol,
+    };
+    state.totalTrades++;
+
+    if (CONFIG.DRY_RUN) {
+      const base = symbol.split('/')[0];
+      if (!state.balances[cheaper]) state.balances[cheaper] = { USDT: capital, free: {} };
+      state.balances[cheaper].USDT -= filled * entryPrice;
+      state.balances[cheaper].free[base] = (state.balances[cheaper].free[base] || 0) + filled;
+    }
+
+    await tg(`🟢 *POSITION OUVERTE*
+
+💎 *Paire :* \`${symbol}\`
+🏦 *Achat sur :* \`${cheaper}\`
+📈 *Écart détecté :* +${spreadPct.toFixed(2)}% vs l'autre exchange
+💵 *Prix d'entrée :* $${fmtPrice(entryPrice)}
+📦 *Quantité :* ${filled.toFixed(6)}
+💰 *Coût :* ${(filled*entryPrice).toFixed(4)} USDT
+
+_Le bot revendra sur ${cheaper} dès un gain net de +${CONFIG.MIN_SPREAD_PCT}%, ou coupera la position à -${CONFIG.STOP_LOSS_PCT}% (stop-loss)._`);
+
+  } catch (e) {
+    state.failedTrades++;
+    console.error('Entrée échouée:', e.message);
+    await tg(`❌ *Échec d'entrée en position*\n\n\`${symbol}\` sur \`${cheaper}\`\nErreur: ${e.message}`);
+  } finally {
+    state.activeTrade = null;
+    fetchBalances().catch(() => {});
+  }
+}
+
+// ── SORTIE DE POSITION : REVENDRE SUR LE MÊME EXCHANGE ───────────────────────
+async function evaluateExit(symbol) {
+  const pos = state.position;
+  if (!pos) return;
+
+  const ticker = await fetchTicker(pos.exchange, symbol);
+  if (!ticker) return;
+
+  const currentPrice = ticker.bid || ticker.last;
+  if (!currentPrice) return;
+
+  const grossGainPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
+  const netGainPct   = grossGainPct - CONFIG.FEE_PCT * 2; // frais achat + vente
+
+  const takeProfit = netGainPct >= CONFIG.MIN_SPREAD_PCT;
+  const stopLoss    = netGainPct <= -CONFIG.STOP_LOSS_PCT;
+
+  if (!takeProfit && !stopLoss) return; // on garde la position, rien à faire ce cycle
+
+  const minCheck = orderMeetsMinimum(pos.exchange, symbol, pos.quantity, currentPrice);
+  if (!minCheck.ok) {
+    console.log(`⚠ Impossible de sortir, ordre trop petit: ${minCheck.reason} — on continue de surveiller`);
+    return;
+  }
+
+  if (state.activeTrade) return;
+  state.activeTrade = true;
+
+  try {
+    const reason = stopLoss ? 'STOP-LOSS' : 'PRISE DE PROFIT';
+    console.log(`${stopLoss ? '🛑' : '🎯'} Sortie (${reason}): vente sur ${pos.exchange} @ ${fmtPrice(currentPrice)} (${netGainPct>=0?'+':''}${netGainPct.toFixed(2)}%)`);
+
+    const order = await placeMarketOrder(pos.exchange, symbol, 'sell', pos.quantity);
+    const filled   = order.filled  || pos.quantity;
+    const exitPrice = order.average || (order.cost && order.filled ? order.cost / order.filled : currentPrice);
+
+    const feeCost = pos.entryCost * (CONFIG.FEE_PCT / 100) * 2;
+    const realPnL = (exitPrice - pos.entryPrice) * filled - feeCost;
+
+    state.totalPnL += realPnL;
+    if (realPnL >= 0) state.successTrades++; else state.failedTrades++;
+
+    if (CONFIG.DRY_RUN) {
+      const base = symbol.split('/')[0];
+      if (state.balances[pos.exchange]) {
+        state.balances[pos.exchange].free[base] = Math.max(0, (state.balances[pos.exchange].free[base] || 0) - filled);
+        state.balances[pos.exchange].USDT += filled * exitPrice;
+      }
+    }
+
+    const trade = {
+      id: 'T' + Date.now(), symbol, buyExchange: pos.exchange, sellExchange: pos.exchange,
+      buyPrice: pos.entryPrice, sellPrice: exitPrice, amount: filled,
+      spreadPct: netGainPct, pnl: realPnL, feeCost,
+      duration: Date.now() - pos.entryTime,
+      timestamp: new Date().toISOString(),
+      status: 'success',
+      exitReason: stopLoss ? 'stop-loss' : 'take-profit',
+    };
+    state.tradeHistory.unshift(trade);
+    if (state.tradeHistory.length > 100) state.tradeHistory.pop();
+
+    state.position = null;
+
+    await tg(`${stopLoss ? '🛑 *STOP-LOSS DÉCLENCHÉ*' : '✅ *POSITION CLÔTURÉE — PROFIT*'}
+
+💎 *Paire :* \`${symbol}\`
+🏦 *Exchange :* \`${pos.exchange}\`
+💵 *Entrée :* $${fmtPrice(pos.entryPrice)} → *Sortie :* $${fmtPrice(exitPrice)}
+📊 *Variation nette :* ${netGainPct>=0?'+':''}${netGainPct.toFixed(2)}%
+💰 *PnL :* ${realPnL>=0?'+':''}${realPnL.toFixed(4)} USDT
+📊 *PnL total (session) :* ${state.totalPnL>=0?'+':''}${state.totalPnL.toFixed(4)} USDT
+⏱ *Durée détention :* ${Math.round((Date.now()-pos.entryTime)/60000)} min
+📋 *Trades :* ${state.successTrades}✅ / ${state.failedTrades}❌`);
+
+  } catch (e) {
+    console.error('Sortie échouée:', e.message);
+    await tg(`⚠️ *Échec de sortie de position*\n\n\`${symbol}\` sur \`${pos.exchange}\`\nErreur: ${e.message}\n\n_La position reste ouverte, nouvelle tentative au prochain scan._`);
+  } finally {
+    state.activeTrade = null;
+    fetchBalances().catch(() => {});
+  }
+}
+
+// ── BOUCLE PRINCIPALE ─────────────────────────────────────────────────────────
 async function scanAndTrade() {
   if (state.activeTrade) return;
   if (!CONFIG.EXCHANGE_1 || !CONFIG.EXCHANGE_2) return;
   state.lastScan = new Date();
 
-  const pairsToScan = CONFIG.SELECTED_PAIR ? [CONFIG.SELECTED_PAIR] : PRIORITY_PAIRS;
-  const ex1 = CONFIG.EXCHANGE_1;
-  const ex2 = CONFIG.EXCHANGE_2;
-  console.log(`🔍 Scan — ${pairsToScan.length} paire(s) sur ${ex1}↔${ex2} — spread min: ${CONFIG.MIN_SPREAD_PCT}% [${CONFIG.DRY_RUN?'SIM':'LIVE'}]`);
-  let signalsFound = 0;
+  const symbol = CONFIG.SELECTED_PAIR || 'BTC/USDT';
 
-  for (const symbol of pairsToScan) {
-    if (state.activeTrade) break;
-
-    try {
-      const [ex1Ticker, ex2Ticker] = await Promise.all([
-        fetchTicker(ex1, symbol),
-        fetchTicker(ex2, symbol),
-      ]);
-
-      if (!ex1Ticker || !ex2Ticker) continue;
-
-      const opportunities = [
-        { buyExchange: ex1, buyPrice: ex1Ticker.ask || ex1Ticker.last, sellExchange: ex2, sellPrice: ex2Ticker.bid || ex2Ticker.last },
-        { buyExchange: ex2, buyPrice: ex2Ticker.ask || ex2Ticker.last, sellExchange: ex1, sellPrice: ex1Ticker.bid || ex1Ticker.last },
-      ];
-
-      for (const opp of opportunities) {
-        if (!opp.buyPrice || !opp.sellPrice) continue;
-
-        const spreadPct = ((opp.sellPrice - opp.buyPrice) / opp.buyPrice) * 100;
-        const netSpread = spreadPct - CONFIG.FEE_PCT * 2;
-
-        if (netSpread < CONFIG.MIN_SPREAD_PCT) continue;
-
-        const amount = capitalFor(opp.buyExchange) / opp.buyPrice;
-        const minCheckBuy  = orderMeetsMinimum(opp.buyExchange,  symbol, amount, opp.buyPrice);
-        const minCheckSell = orderMeetsMinimum(opp.sellExchange, symbol, amount, opp.sellPrice);
-        if (!minCheckBuy.ok)  { console.log(`⚠ Ordre trop petit: ${minCheckBuy.reason}`);  continue; }
-        if (!minCheckSell.ok) { console.log(`⚠ Ordre trop petit: ${minCheckSell.reason}`); continue; }
-
-        const fundsCheck = hasEnoughFunds(opp.buyExchange, opp.sellExchange, symbol, opp.buyPrice);
-        if (!fundsCheck.ok) {
-          if (CONFIG.AUTO_REBALANCE) {
-            const rebalanced = await rebalanceIfNeeded(opp.buyExchange, opp.sellExchange, symbol, opp.buyPrice);
-            if (!rebalanced.ok) {
-              console.log(`💰 Fonds insuffisants (rééquilibrage impossible): ${rebalanced.reason}`);
-              if (shouldAlertFunds()) await tg(`💰 *Rééquilibrage impossible*\n\n\`${rebalanced.reason}\`\n\nAucun trade tenté sur ${symbol} (${opp.buyExchange}→${opp.sellExchange}).\n\n_Cette alerte ne sera renvoyée qu'après 5 min, même si ça continue d'échouer._`);
-              continue;
-            }
-            console.log(`✅ Rééquilibré — trade peut continuer`);
-          } else {
-            console.log(`💰 Fonds insuffisants: ${fundsCheck.reason}`);
-            continue;
-          }
-        }
-
-        signalsFound++;
-        console.log(`🎯 Signal: ${symbol} +${netSpread.toFixed(2)}% net — ${opp.buyExchange}→${opp.sellExchange} [${CONFIG.DRY_RUN ? 'SIM' : 'LIVE'}]`);
-        await executeTrade({ symbol, spreadPct: netSpread, ...opp });
-        break;
-      }
-    } catch (e) {
-      console.error(`Scan ${symbol}:`, e.message);
+  try {
+    if (state.position) {
+      await evaluateExit(symbol);
+    } else {
+      await evaluateEntry(symbol);
     }
-  }
-
-  if (signalsFound === 0) {
-    console.log(`📭 Aucun signal trouvé (spread < ${CONFIG.MIN_SPREAD_PCT}% sur ${pairsToScan.join(', ')})`);
+  } catch (e) {
+    console.error('Scan error:', e.message);
   }
 }
 
-// ── RAPPORT HEBDOMADAIRE ──────────────────────────────────────────────────────
+// ── RAPPORT ────────────────────────────────────────────────────────────────────
 async function sendWeeklyReport() {
   const bals = await fetchBalances();
   const ex1 = CONFIG.EXCHANGE_1 || '—';
   const ex2 = CONFIG.EXCHANGE_2 || '—';
+  const posInfo = state.position
+    ? `🟢 Position ouverte sur \`${state.position.exchange}\` — entrée $${fmtPrice(state.position.entryPrice)}, ${state.position.quantity.toFixed(6)} unités`
+    : '⚪ Aucune position ouverte actuellement';
+
   await tg(`📊 *RAPPORT ArbiScan*
 
-💰 *PnL total :* \`+${state.totalPnL.toFixed(4)} USDT\`
+💰 *PnL total :* \`${state.totalPnL>=0?'+':''}${state.totalPnL.toFixed(4)} USDT\`
 📋 *Total trades :* ${state.totalTrades}
 ✅ *Réussis :* ${state.successTrades}
 ❌ *Échoués :* ${state.failedTrades}
 🎯 *Taux réussite :* ${state.totalTrades > 0 ? ((state.successTrades/state.totalTrades)*100).toFixed(1) : 0}%
 
-*Balances actuelles :*
-${ex1.toUpperCase()} USDT : \`${bals[ex1]?.USDT?.toFixed(2) || '—'}\`
-${ex2.toUpperCase()} USDT : \`${bals[ex2]?.USDT?.toFixed(2) || '—'}\`
+${posInfo}
 
-_Vous pouvez retirer les bénéfices et maintenir le ratio 50/50_`);
+*Balances actuelles :*
+${ex1.toUpperCase()} : \`${bals[ex1]?.USDT?.toFixed(2) || '—'}\` USDT
+${ex2.toUpperCase()} : \`${bals[ex2]?.USDT?.toFixed(2) || '—'}\` USDT`);
 }
 
 // ── DÉMARRER LE BOT ───────────────────────────────────────────────────────────
 async function start(dynamicConfig = {}) {
-  // Invalider immédiatement toute session précédente : dès que son numéro de
-  // session ne correspond plus à currentSession, sa boucle de scan s'arrête
-  // d'elle-même au prochain tick (voir loop() plus bas).
   currentSession++;
   const mySession = currentSession;
   state.running = false;
-  await new Promise(r => setTimeout(r, 500)); // laisse le temps à une éventuelle boucle en cours de voir le changement
+  await new Promise(r => setTimeout(r, 500));
 
-  // Par défaut, chaque démarrage EXPLICITE (depuis le site) repart de zéro sur
-  // les compteurs (PnL total, trades) — sinon "PnL total" mélange les anciennes
-  // sessions de test avec la nouvelle et devient trompeur. Le redémarrage
-  // AUTOMATIQUE après un reboot serveur passe resetStats:false pour garder la
-  // continuité (voir server.js).
   if (dynamicConfig.resetStats !== false) {
     state.totalPnL      = 0;
     state.totalTrades   = 0;
     state.successTrades = 0;
     state.failedTrades  = 0;
     state.tradeHistory  = [];
+    state.position       = dynamicConfig.resetPosition !== false ? null : state.position;
     console.log('🔄 Compteurs remis à zéro pour cette nouvelle session');
   }
 
@@ -631,15 +449,13 @@ async function start(dynamicConfig = {}) {
   CONFIG.CAPITAL_1      = dynamicConfig.capital1 != null ? parseFloat(dynamicConfig.capital1) : CONFIG.CAPITAL_1;
   CONFIG.CAPITAL_2      = dynamicConfig.capital2 != null ? parseFloat(dynamicConfig.capital2) : CONFIG.CAPITAL_2;
   CONFIG.MIN_SPREAD_PCT = dynamicConfig.minSpreadPct != null ? parseFloat(dynamicConfig.minSpreadPct) : CONFIG.MIN_SPREAD_PCT;
+  CONFIG.STOP_LOSS_PCT  = dynamicConfig.stopLossPct  != null ? parseFloat(dynamicConfig.stopLossPct)  : CONFIG.STOP_LOSS_PCT;
   CONFIG.DRY_RUN        = dynamicConfig.dryRun !== undefined ? !!dynamicConfig.dryRun : CONFIG.DRY_RUN;
-  CONFIG.AUTO_REBALANCE = !!dynamicConfig.autoRebalance;
   CONFIG.SELECTED_PAIR  = dynamicConfig.pair || null;
 
-  // Instances publiques (prix) — toujours nécessaires
   ensurePublicExchange(CONFIG.EXCHANGE_1);
   ensurePublicExchange(CONFIG.EXCHANGE_2);
 
-  // Instances privées (ordres + balances réelles) — si des clés sont fournies
   if (dynamicConfig.apiConfigs) {
     for (const [id, cfg] of Object.entries(dynamicConfig.apiConfigs)) {
       if (cfg?.apiKey && cfg?.secret) {
@@ -657,12 +473,12 @@ async function start(dynamicConfig = {}) {
 
   console.log('\n🤖 ArbiScan Trade Bot démarré');
   console.log(`   Exchanges    : ${CONFIG.EXCHANGE_1.toUpperCase()} + ${CONFIG.EXCHANGE_2.toUpperCase()}`);
-  console.log(`   Paire        : ${CONFIG.SELECTED_PAIR || 'Multi-paires'}`);
+  console.log(`   Paire        : ${CONFIG.SELECTED_PAIR || 'BTC/USDT'}`);
   console.log(`   Spread min   : ${CONFIG.MIN_SPREAD_PCT}%`);
+  console.log(`   Stop-loss    : -${CONFIG.STOP_LOSS_PCT}%`);
   console.log(`   Capital ${CONFIG.EXCHANGE_1.toUpperCase()}  : ${CONFIG.CAPITAL_1} USDT`);
   console.log(`   Capital ${CONFIG.EXCHANGE_2.toUpperCase()}  : ${CONFIG.CAPITAL_2} USDT`);
   console.log(`   Mode         : ${CONFIG.DRY_RUN ? '🧪 SIMULATION' : '💰 PRODUCTION'}`);
-  console.log(`   Rééquilibrage: ${CONFIG.AUTO_REBALANCE ? '🔁 Activé' : '⏸ Désactivé'}`);
   console.log(`   Scan interval: ${CONFIG.SCAN_INTERVAL / 1000}s\n`);
 
   try {
@@ -675,24 +491,25 @@ async function start(dynamicConfig = {}) {
     await tg(`🚀 *ArbiScan Bot DÉMARRÉ*
 
 🤖 *Mode :* ${CONFIG.DRY_RUN ? '🧪 Simulation' : '💰 Production'}
-💎 *Paire :* ${CONFIG.SELECTED_PAIR || 'Multi-paires (top 30)'}
+💎 *Paire :* ${CONFIG.SELECTED_PAIR || 'BTC/USDT'}
 🏦 *Exchanges :* ${ex1Label} ↔ ${ex2Label}
-📈 *Spread min :* ${CONFIG.MIN_SPREAD_PCT}%
+📈 *Entrée si écart ≥ :* ${CONFIG.MIN_SPREAD_PCT}%
+🎯 *Sortie si gain net ≥ :* ${CONFIG.MIN_SPREAD_PCT}%
+🛑 *Stop-loss si perte ≥ :* ${CONFIG.STOP_LOSS_PCT}%
 💵 *Capital ${ex1Label} :* ${CONFIG.CAPITAL_1} USDT
 💵 *Capital ${ex2Label} :* ${CONFIG.CAPITAL_2} USDT
 
-*Balances :*
-${ex1Label} USDT : \`${ex1USDT.toFixed(2)}\`
-${ex2Label} USDT : \`${ex2USDT.toFixed(2)}\`
+*Balances USDT :*
+${ex1Label} : \`${ex1USDT.toFixed(2)}\`
+${ex2Label} : \`${ex2USDT.toFixed(2)}\`
 
-_Scan toutes les ${CONFIG.SCAN_INTERVAL / 1000}s — Trade si spread > ${CONFIG.MIN_SPREAD_PCT}%_`);
+_Dépose uniquement de l'USDT — le bot achète le token lui-même quand une opportunité apparaît, et revend au bon moment. Scan toutes les ${CONFIG.SCAN_INTERVAL/1000}s._`);
 
   } catch (e) {
     console.error('Erreur démarrage:', e.message);
     await tg(`❌ *Erreur démarrage bot*\n\n\`${e.message}\`\n\nVérifiez les clés API.`);
   }
 
-  // Rapport hebdomadaire automatique (chaque dimanche à 20h)
   if (!global.__arbiscanWeeklyReportTimer) {
     global.__arbiscanWeeklyReportTimer = setInterval(() => {
       const now = new Date();
@@ -703,7 +520,7 @@ _Scan toutes les ${CONFIG.SCAN_INTERVAL / 1000}s — Trade si spread > ${CONFIG.
   }
 
   const loop = async () => {
-    if (!state.running || mySession !== currentSession) return; // session périmée → on arrête cette boucle définitivement
+    if (!state.running || mySession !== currentSession) return;
     try { await scanAndTrade(); } catch (e) { console.error('Loop error:', e.message); }
     if (mySession === currentSession) setTimeout(loop, CONFIG.SCAN_INTERVAL);
   };
@@ -711,10 +528,10 @@ _Scan toutes les ${CONFIG.SCAN_INTERVAL / 1000}s — Trade si spread > ${CONFIG.
 }
 
 function stop() {
-  currentSession++; // invalide toute boucle de scan en cours, ancienne ou actuelle
+  currentSession++;
   state.running = false;
   console.log('Bot arrêté.');
-  tg('⏹ *Bot ArbiScan arrêté manuellement*');
+  tg('⏹ *Bot ArbiScan arrêté manuellement*' + (state.position ? `\n\n⚠️ Une position reste ouverte sur \`${state.position.exchange}\` (${state.position.quantity.toFixed(6)} unités) — elle ne sera pas vendue automatiquement tant que le bot est arrêté.` : ''));
 }
 
 function getState() {
@@ -725,6 +542,7 @@ function getState() {
     failedTrades:  state.failedTrades,
     totalPnL:      state.totalPnL,
     balances:      state.balances,
+    position:      state.position,
     tradeHistory:  state.tradeHistory,
     config: {
       exchange1:    CONFIG.EXCHANGE_1,
@@ -732,9 +550,9 @@ function getState() {
       capital1:     CONFIG.CAPITAL_1,
       capital2:     CONFIG.CAPITAL_2,
       minSpreadPct: CONFIG.MIN_SPREAD_PCT,
+      stopLossPct:  CONFIG.STOP_LOSS_PCT,
       dryRun:       CONFIG.DRY_RUN,
-      autoRebalance: CONFIG.AUTO_REBALANCE,
-      selectedPair: CONFIG.SELECTED_PAIR || 'Multi-paires',
+      selectedPair: CONFIG.SELECTED_PAIR || 'BTC/USDT',
       scanIntervalSec: CONFIG.SCAN_INTERVAL / 1000,
     }
   };
