@@ -72,8 +72,6 @@ async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
 /keepalive\\_on — Activer le ping automatique toutes les 13min
 /keepalive\\_off — Désactiver le ping automatique
 
-📊 *Signaux*
-/scan — Lancer un scan rapide (Top 30 paires)
 /help — Afficher cette aide`);
     return;
   }
@@ -82,7 +80,7 @@ async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
   if (text === '/ping') {
     const start = Date.now();
     try {
-      await fetch(APP_URL + '/api/status');
+      await fetch(APP_URL + '/api/bot/status');
       const ms = Date.now() - start;
       await send(chatId, `✅ *Serveur en ligne*\n\n⏱ Temps de réponse : \`${ms}ms\`\n🌐 URL : ${APP_URL}`);
     } catch(e) {
@@ -169,31 +167,6 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
     return; // Le rapport est envoyé par sendWeeklyReport directement
   }
 
-  // ── /scan ──────────────────────────────────────────────────────────────────
-  if (text === '/scan') {
-    await send(chatId, '⏳ Scan en cours sur les Top 30 paires...');
-    try {
-      const r = await fetch(`${APP_URL}/api/scan`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ minSpread: 0.5, capital: 100, pairLimit: 30, usePriority: true }),
-      });
-      const d = await r.json();
-      const opps = (d.opportunities || []).slice(0, 5);
-      if (!opps.length) {
-        await send(chatId, '📭 Aucun signal trouvé (spread > 0.5%) sur les Top 30 paires.');
-        return;
-      }
-      const lines = opps.map((o, i) =>
-        `${i+1}. *${o.symbol}* — +${o.spreadPct.toFixed(2)}%\n   ${o.buyExchange} → ${o.sellExchange} | +${o.netProfit.toFixed(3)} USDT`
-      ).join('\n\n');
-      await send(chatId, `⬡ *Top ${opps.length} signaux d'arbitrage*\n\n${lines}\n\n_Scan: ${(d.stats.scanDurationMs/1000).toFixed(1)}s — ${d.stats.totalSignals} signaux total_`);
-    } catch(e) {
-      await send(chatId, `❌ Erreur scan : ${e.message}`);
-    }
-    return;
-  }
-
   // Commande non reconnue
   await send(chatId, `❓ Commande non reconnue : \`${text}\`\n\nTapez /help pour voir les commandes disponibles.`);
 }
@@ -204,7 +177,7 @@ function startKeepAlive(notifyChatId = null) {
 
   keepAliveTimer = setInterval(async () => {
     try {
-      const r = await fetch(APP_URL + '/api/status');
+      const r = await fetch(APP_URL + '/api/bot/status');
       if (r.ok) {
         console.log(`[Keep-alive] ✅ Ping réussi — ${new Date().toLocaleTimeString('fr')}`);
       }
