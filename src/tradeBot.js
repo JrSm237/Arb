@@ -220,6 +220,35 @@ async function rebalanceIfNeeded(buyExchange, sellExchange, symbol, buyPrice) {
   return { ok: true };
 }
 
+// ── VÉRIFIER LES MINIMUMS D'ORDRE DE L'EXCHANGE ──────────────────────────────
+// Chaque exchange refuse les ordres trop petits (valeur ou quantité en dessous
+// d'un seuil). On vérifie AVANT d'envoyer l'ordre pour éviter un rejet en
+// pleine exécution (dangereux si l'autre jambe, elle, est déjà passée).
+function getOrderMinimum(exchangeId, symbol) {
+  try {
+    const ex = publicExchanges[exchangeId];
+    const market = ex?.markets?.[symbol];
+    if (!market) return null;
+    return {
+      minAmount: market.limits?.amount?.min || 0,
+      minCost:   market.limits?.cost?.min   || 0,
+    };
+  } catch { return null; }
+}
+
+function orderMeetsMinimum(exchangeId, symbol, amount, price) {
+  const lim = getOrderMinimum(exchangeId, symbol);
+  if (!lim) return { ok: true }; // marché pas encore chargé — on ne bloque pas, l'exchange validera lui-même
+  const cost = amount * price;
+  if (lim.minAmount && amount < lim.minAmount) {
+    return { ok: false, reason: `${exchangeId}: quantité ${amount.toFixed(6)} < minimum ${lim.minAmount}` };
+  }
+  if (lim.minCost && cost < lim.minCost) {
+    return { ok: false, reason: `${exchangeId}: valeur ordre ${cost.toFixed(3)} USDT < minimum ${lim.minCost} USDT` };
+  }
+  return { ok: true };
+}
+
 // ── VÉRIFIER QU'ON A ASSEZ DE FONDS ──────────────────────────────────────────
 function hasEnoughFunds(buyExchange, sellExchange, symbol, buyPrice) {
   // En simulation : toujours autoriser le trade
@@ -298,44 +327,51 @@ async function executeTrade(opp) {
 ${CONFIG.DRY_RUN ? '\n⚠️ _MODE SIMULATION — pas de vrai trade_' : ''}`);
 
   try {
-    const [buyOrder, sellOrder] = await Promise.all([
+    const [buyResult, sellResult] = await Promise.allSettled([
       placeMarketOrder(buyExchange,  symbol, 'buy',  amount),
       placeMarketOrder(sellExchange, symbol, 'sell', amount),
     ]);
 
-    const elapsed = Date.now() - startTime;
+    const buyOk  = buyResult.status  === 'fulfilled';
+    const sellOk = sellResult.status === 'fulfilled';
 
-    const realBuyPrice  = buyOrder.average  || buyPrice;
-    const realSellPrice = sellOrder.average || sellPrice;
-    const realPnL = (realSellPrice - realBuyPrice) * amount - feeCost;
+    // ── CAS 1 : LES DEUX JAMBES ONT RÉUSSI ──────────────────────────────────
+    if (buyOk && sellOk) {
+      const buyOrder  = buyResult.value;
+      const sellOrder = sellResult.value;
+      const elapsed = Date.now() - startTime;
 
-    if (CONFIG.DRY_RUN) {
-      const b = symbol.split('/')[0];
-      if (!state.balances[buyExchange])  state.balances[buyExchange]  = { USDT: capitalFor(buyExchange),  free: {} };
-      if (!state.balances[sellExchange]) state.balances[sellExchange] = { USDT: capitalFor(sellExchange), free: {} };
-      state.balances[buyExchange].USDT -= capital;
-      state.balances[buyExchange].free[b] = (state.balances[buyExchange].free[b] || 0) + amount;
-      state.balances[sellExchange].free[b] = Math.max(0, (state.balances[sellExchange].free[b] || 0) - amount);
-      state.balances[sellExchange].USDT += (amount * realSellPrice) - feeCost / 2;
-    }
+      const realBuyPrice  = buyOrder.average  || buyPrice;
+      const realSellPrice = sellOrder.average || sellPrice;
+      const realPnL = (realSellPrice - realBuyPrice) * amount - feeCost;
 
-    state.totalPnL += realPnL;
-    state.successTrades++;
+      if (CONFIG.DRY_RUN) {
+        const b = symbol.split('/')[0];
+        if (!state.balances[buyExchange])  state.balances[buyExchange]  = { USDT: capitalFor(buyExchange),  free: {} };
+        if (!state.balances[sellExchange]) state.balances[sellExchange] = { USDT: capitalFor(sellExchange), free: {} };
+        state.balances[buyExchange].USDT -= capital;
+        state.balances[buyExchange].free[b] = (state.balances[buyExchange].free[b] || 0) + amount;
+        state.balances[sellExchange].free[b] = Math.max(0, (state.balances[sellExchange].free[b] || 0) - amount);
+        state.balances[sellExchange].USDT += (amount * realSellPrice) - feeCost / 2;
+      }
 
-    const trade = {
-      id: tradeId, symbol, buyExchange, sellExchange,
-      buyPrice: realBuyPrice, sellPrice: realSellPrice, amount, spreadPct,
-      pnl: realPnL, feeCost,
-      buyOrderId:  buyOrder.id,
-      sellOrderId: sellOrder.id,
-      duration:    elapsed,
-      timestamp:   new Date().toISOString(),
-      status:      'success',
-    };
-    state.tradeHistory.unshift(trade);
-    if (state.tradeHistory.length > 100) state.tradeHistory.pop();
+      state.totalPnL += realPnL;
+      state.successTrades++;
 
-    await tg(`✅ *TRADE RÉUSSI* \`${tradeId}\`
+      const trade = {
+        id: tradeId, symbol, buyExchange, sellExchange,
+        buyPrice: realBuyPrice, sellPrice: realSellPrice, amount, spreadPct,
+        pnl: realPnL, feeCost,
+        buyOrderId:  buyOrder.id,
+        sellOrderId: sellOrder.id,
+        duration:    elapsed,
+        timestamp:   new Date().toISOString(),
+        status:      'success',
+      };
+      state.tradeHistory.unshift(trade);
+      if (state.tradeHistory.length > 100) state.tradeHistory.pop();
+
+      await tg(`✅ *TRADE RÉUSSI* \`${tradeId}\`
 
 💎 *Paire :* \`${symbol}\`
 💰 *PnL net :* \`+${realPnL.toFixed(4)} USDT\`
@@ -346,8 +382,55 @@ ${CONFIG.DRY_RUN ? '\n⚠️ _MODE SIMULATION — pas de vrai trade_' : ''}`);
 🔼 *Vendu :* ${amount.toFixed(6)} @ $${realSellPrice.toFixed(4)} sur \`${sellExchange}\`
 📋 *Trades :* ${state.successTrades}✅ / ${state.failedTrades}❌`);
 
-    setTimeout(fetchBalances, 2000);
-    return trade;
+      return trade;
+    }
+
+    // ── CAS 2 : EXÉCUTION PARTIELLE — UNE SEULE JAMBE EST PASSÉE ────────────
+    // C'est la situation la plus dangereuse : de l'argent/des tokens ont
+    // réellement bougé sur UN exchange, mais pas sur l'autre. Le bot n'a
+    // aucun moyen d'annuler un ordre au marché déjà exécuté. On arrête le
+    // bot automatiquement plutôt que de répéter l'erreur en boucle, et on
+    // alerte immédiatement pour une intervention manuelle.
+    if (buyOk !== sellOk) {
+      state.failedTrades++;
+      const filledSide = buyOk ? 'ACHAT' : 'VENTE';
+      const filledEx   = buyOk ? buyExchange : sellExchange;
+      const failedEx   = buyOk ? sellExchange : buyExchange;
+      const filledOrder = buyOk ? buyResult.value : sellResult.value;
+      const failReason  = (buyOk ? sellResult.reason : buyResult.reason)?.message || 'Erreur inconnue';
+
+      state.running = false; // pause automatique du bot
+
+      const trade = {
+        id: tradeId, symbol, buyExchange, sellExchange, spreadPct,
+        pnl: 0, status: 'partial',
+        error: `Exécution partielle : ${filledSide} exécuté sur ${filledEx} (${(filledOrder?.filled||amount).toFixed(6)} ${base}), échec sur ${failedEx} : ${failReason}`,
+        timestamp: new Date().toISOString(),
+      };
+      state.tradeHistory.unshift(trade);
+      if (state.tradeHistory.length > 100) state.tradeHistory.pop();
+
+      await tg(`🚨🚨 *EXÉCUTION PARTIELLE — BOT MIS EN PAUSE* \`${tradeId}\` 🚨🚨
+
+⚠️ Une seule des deux jambes du trade a été exécutée !
+
+💎 *Paire :* \`${symbol}\`
+✅ *${filledSide} exécuté sur* \`${filledEx}\` — ${(filledOrder?.filled||amount).toFixed(6)} ${base}
+❌ *Échec sur* \`${failedEx}\` : ${failReason}
+
+🛑 *Le bot est automatiquement arrêté* pour éviter que ça se reproduise en boucle.
+
+⚠️ *ACTION REQUISE* :
+1. Vérifie tes balances réelles sur ${filledEx} et ${failedEx}
+2. Rééquilibre manuellement si besoin (tu as maintenant plus ou moins de ${base}/USDT que prévu sur ${filledEx})
+3. Relance le bot depuis le site une fois vérifié`);
+
+      await fetchBalances();
+      return trade;
+    }
+
+    // ── CAS 3 : LES DEUX JAMBES ONT ÉCHOUÉ — AUCUNE POSITION OUVERTE ────────
+    throw new Error(`Achat: ${buyResult.reason?.message || 'ok'} | Vente: ${sellResult.reason?.message || 'ok'}`);
 
   } catch (e) {
     state.failedTrades++;
@@ -366,14 +449,27 @@ ${CONFIG.DRY_RUN ? '\n⚠️ _MODE SIMULATION — pas de vrai trade_' : ''}`);
 ⚠️ *Erreur :* \`${e.message}\`
 📋 *Trades :* ${state.successTrades}✅ / ${state.failedTrades}❌
 
-_Vérifiez les balances et les permissions API_`);
+_Aucune position ouverte — les deux jambes ont échoué, rien n'a bougé._`);
 
     console.error('Trade failed:', e.message);
     return trade;
 
   } finally {
     state.activeTrade = null;
+    // Rafraîchit toujours les balances après une tentative de trade (succès,
+    // échec ou partiel) — sans ça, les vérifications de fonds du prochain
+    // scan travaillent sur des données périmées.
+    fetchBalances().catch(() => {});
   }
+}
+
+// Anti-spam : n'alerte sur Telegram qu'une fois toutes les 5 minutes max
+// pour les échecs de rééquilibrage (sinon un scan toutes les 15s peut spammer).
+let lastFundsAlertTs = 0;
+function shouldAlertFunds() {
+  const now = Date.now();
+  if (now - lastFundsAlertTs > 5 * 60 * 1000) { lastFundsAlertTs = now; return true; }
+  return false;
 }
 
 // ── SCAN ET DÉTECTION D'OPPORTUNITÉS ─────────────────────────────────────────
@@ -412,12 +508,19 @@ async function scanAndTrade() {
 
         if (netSpread < CONFIG.MIN_SPREAD_PCT) continue;
 
+        const amount = capitalFor(opp.buyExchange) / opp.buyPrice;
+        const minCheckBuy  = orderMeetsMinimum(opp.buyExchange,  symbol, amount, opp.buyPrice);
+        const minCheckSell = orderMeetsMinimum(opp.sellExchange, symbol, amount, opp.sellPrice);
+        if (!minCheckBuy.ok)  { console.log(`⚠ Ordre trop petit: ${minCheckBuy.reason}`);  continue; }
+        if (!minCheckSell.ok) { console.log(`⚠ Ordre trop petit: ${minCheckSell.reason}`); continue; }
+
         const fundsCheck = hasEnoughFunds(opp.buyExchange, opp.sellExchange, symbol, opp.buyPrice);
         if (!fundsCheck.ok) {
           if (CONFIG.AUTO_REBALANCE) {
             const rebalanced = await rebalanceIfNeeded(opp.buyExchange, opp.sellExchange, symbol, opp.buyPrice);
             if (!rebalanced.ok) {
               console.log(`💰 Fonds insuffisants (rééquilibrage impossible): ${rebalanced.reason}`);
+              if (shouldAlertFunds()) await tg(`💰 *Rééquilibrage impossible*\n\n\`${rebalanced.reason}\`\n\nAucun trade tenté sur ${symbol} (${opp.buyExchange}→${opp.sellExchange}).\n\n_Cette alerte ne sera renvoyée qu'après 5 min, même si ça continue d'échouer._`);
               continue;
             }
             console.log(`✅ Rééquilibré — trade peut continuer`);
