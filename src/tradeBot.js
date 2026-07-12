@@ -29,6 +29,12 @@ const publicExchanges = {};
 // Instances PRIVÉES pour passer les ordres / lire les balances (clés requises)
 const privateExchanges = {};
 
+// Compteur de session : incrémenté à chaque start()/stop(). Toute boucle de
+// scan lancée par une session précédente se compare à ce compteur et s'arrête
+// d'elle-même dès qu'il change — ça évite d'avoir plusieurs boucles de scan
+// qui tournent en parallèle si le bot est redémarré plusieurs fois.
+let currentSession = 0;
+
 function ensurePublicExchange(id) {
   if (!ccxt[id]) throw new Error(`Exchange "${id}" non supporté par CCXT`);
   if (!publicExchanges[id]) {
@@ -394,10 +400,13 @@ _Vous pouvez retirer les bénéfices et maintenir le ratio 50/50_`);
 
 // ── DÉMARRER LE BOT ───────────────────────────────────────────────────────────
 async function start(dynamicConfig = {}) {
-  if (state.running) {
-    state.running = false;
-    await new Promise(r => setTimeout(r, 1000));
-  }
+  // Invalider immédiatement toute session précédente : dès que son numéro de
+  // session ne correspond plus à currentSession, sa boucle de scan s'arrête
+  // d'elle-même au prochain tick (voir loop() plus bas).
+  currentSession++;
+  const mySession = currentSession;
+  state.running = false;
+  await new Promise(r => setTimeout(r, 500)); // laisse le temps à une éventuelle boucle en cours de voir le changement
 
   if (!dynamicConfig.exchange1 || !dynamicConfig.exchange2) {
     throw new Error('Deux exchanges doivent être sélectionnés (exchange1 et exchange2)');
@@ -478,14 +487,15 @@ _Scan toutes les ${CONFIG.SCAN_INTERVAL / 1000}s — Trade si spread > ${CONFIG.
   }
 
   const loop = async () => {
-    if (!state.running) return;
+    if (!state.running || mySession !== currentSession) return; // session périmée → on arrête cette boucle définitivement
     try { await scanAndTrade(); } catch (e) { console.error('Loop error:', e.message); }
-    setTimeout(loop, CONFIG.SCAN_INTERVAL);
+    if (mySession === currentSession) setTimeout(loop, CONFIG.SCAN_INTERVAL);
   };
   setTimeout(loop, 3000);
 }
 
 function stop() {
+  currentSession++; // invalide toute boucle de scan en cours, ancienne ou actuelle
   state.running = false;
   console.log('Bot arrêté.');
   tg('⏹ *Bot ArbiScan arrêté manuellement*');
