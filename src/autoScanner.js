@@ -7,7 +7,7 @@ const { processAlerts } = require('./telegram');
 
 const ALERT_SPREAD_THRESHOLD = parseFloat(process.env.ALERT_SPREAD || '2.0');
 const SCAN_INTERVAL_MS       = parseInt(process.env.SCAN_INTERVAL  || '60000'); // 60s
-const AUTO_SCAN_PAIRS        = parseInt(process.env.AUTO_SCAN_PAIRS || '50');   // top 50 paires
+const AUTO_SCAN_PAIRS        = parseInt(process.env.AUTO_SCAN_PAIRS || '30');   // top 30 paires (léger)
 
 let isRunning    = false;
 let scanCount    = 0;
@@ -50,7 +50,7 @@ async function runAutoScan() {
         if (r.status === 'fulfilled') allOpps.push(...r.value);
       }
       // Pause anti rate-limit
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => setTimeout(r, 250));
     }
 
     allOpps.sort((a, b) => b.netProfit - a.netProfit);

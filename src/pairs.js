@@ -6205,4 +6205,4 @@ function boostPair(symbol, spreadPct) {
   _scores.set(symbol, (_scores.get(symbol)||0) + spreadPct);
 }
 
-module.exports = { ALL_PAIRS, TOP_PAIRS: TOP, getPrioritizedPairs, boostPair };
+module.exports = { ALL_PAIRS, TIER1: TOP, TOP_PAIRS: TOP, getPrioritizedPairs, boostPair };

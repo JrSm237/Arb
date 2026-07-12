@@ -15,6 +15,18 @@ const PORT    = process.env.PORT || 3000;
 const APP_URL = process.env.APP_URL || 'https://arbiscan-f4fk.onrender.com';
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
+// ── FILETS DE SÉCURITÉ GLOBAUX ────────────────────────────────────────────────
+// Une exception non gérée (ex: bug dans une lib exchange) tuerait sinon tout
+// le process Node — et coupe brutalement toute requête en cours (→ le client
+// reçoit une réponse vide, "Unexpected end of JSON input"). On log au lieu de
+// planter, pour que le serveur reste debout.
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️  Unhandled Promise Rejection:', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️  Uncaught Exception:', err?.message || err);
+});
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
@@ -24,8 +36,8 @@ const EXCHANGE_IDS  = [
   'binance', 'bybit', 'okx', 'kraken', 'kucoin',
   'gate', 'mexc', 'bitget', 'htx', 'coinbaseadvanced'
 ];
-const WAVE_SIZE     = 40;
-const WAVE_DELAY_MS = 200;
+const WAVE_SIZE     = 15;
+const WAVE_DELAY_MS = 400;
 
 // ── EXCHANGE INSTANCES (scanner public — pas de clés) ─────────────────────────
 const exchangeInstances = {};
@@ -202,8 +214,18 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+// ── GARDE ANTI-EMPILEMENT ──────────────────────────────────────────────────
+// Si un scan manuel est déjà en cours, on refuse le suivant plutôt que de
+// laisser plusieurs scans lourds tourner en parallèle (source de crash
+// mémoire sur les petites instances).
+let manualScanInProgress = false;
+
 // POST /api/scan — scan rapide
 app.post('/api/scan', async (req, res) => {
+  if (manualScanInProgress) {
+    return res.status(429).json({ error: 'Un scan est déjà en cours — réessayez dans quelques secondes' });
+  }
+  manualScanInProgress = true;
   const { minSpread = 0.05, capital = 1000, pairLimit = 30, exchanges = EXCHANGE_IDS, usePriority = true } = req.body;
   const t0    = Date.now();
   const pairs = usePriority ? getPrioritizedPairs(parseInt(pairLimit)) : TIER1.slice(0, parseInt(pairLimit));
@@ -227,11 +249,17 @@ app.post('/api/scan', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    manualScanInProgress = false;
   }
 });
 
 // POST /api/scan/full — scan étendu
 app.post('/api/scan/full', async (req, res) => {
+  if (manualScanInProgress) {
+    return res.status(429).json({ error: 'Un scan est déjà en cours — réessayez dans quelques secondes' });
+  }
+  manualScanInProgress = true;
   const { minSpread = 0.05, capital = 1000, exchanges = EXCHANGE_IDS, maxPairs = 200 } = req.body;
   const t0    = Date.now();
   const pairs = getPrioritizedPairs(parseInt(maxPairs));
@@ -253,6 +281,8 @@ app.post('/api/scan/full', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    manualScanInProgress = false;
   }
 });
 
@@ -482,6 +512,16 @@ app.get('/api/bot/keepalive', (req, res) => {
 app.post('/telegram-webhook', async (req, res) => {
   res.sendStatus(200);
   await tgCommander.processUpdate(req.body, tradeBot, loadBotConfig, saveBotConfig);
+});
+
+// ── GESTIONNAIRE D'ERREURS GLOBAL ─────────────────────────────────────────────
+// Filet de sécurité final : si une route lève une erreur non interceptée,
+// on renvoie du JSON (jamais la page d'erreur HTML par défaut d'Express,
+// qui ferait planter le .json() côté navigateur).
+app.use((err, req, res, next) => {
+  console.error('⚠️  Erreur route non gérée:', err?.message || err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: err?.message || 'Erreur serveur inattendue' });
 });
 
 // ── DÉMARRAGE ─────────────────────────────────────────────────────────────────

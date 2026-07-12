@@ -140,7 +140,12 @@ async function fetchBalances() {
         continue;
       }
 
-      const bal = await ex.fetchBalance();
+      // Timeout dur (15s) en plus du timeout interne de ccxt : évite qu'un
+      // exchange qui ne répond pas bloque indéfiniment le démarrage du bot.
+      const bal = await Promise.race([
+        ex.fetchBalance(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout (15s) en attente de ${id}`)), 15000)),
+      ]);
       state.balances[id] = {
         USDT:  bal.USDT?.free  || 0,
         total: bal.total || {},
