@@ -51,6 +51,28 @@ function getExchange(id) {
   return exchangeInstances[id];
 }
 
+// ── PRÉCHARGEMENT SÉQUENTIEL DES MARCHÉS ──────────────────────────────────────
+// CCXT charge automatiquement toute la liste des marchés d'un exchange (parfois
+// plusieurs Mo) dès le premier fetchTicker. Si les 10 exchanges font ça en même
+// temps (premier scan auto), ça crée un pic mémoire brutal qui peut faire
+// planter les instances à RAM limitée. On étale ce chargement dans le temps.
+async function warmupExchanges(exchangeIds) {
+  console.log('🔥 Préchargement séquentiel des marchés...');
+  for (const id of exchangeIds) {
+    try {
+      const ex = getExchange(id);
+      if (ex) {
+        await ex.loadMarkets();
+        console.log(`   ✓ ${id} (${Object.keys(ex.markets || {}).length} marchés)`);
+      }
+    } catch (e) {
+      console.log(`   ✗ ${id}: ${e.message?.slice(0, 80)}`);
+    }
+    await new Promise(r => setTimeout(r, 700)); // laisse le GC respirer entre chaque exchange
+  }
+  console.log('✅ Préchargement terminé');
+}
+
 // ── FETCH TICKER ──────────────────────────────────────────────────────────────
 async function fetchTickerSafe(exchangeId, symbol) {
   try {
@@ -533,9 +555,12 @@ app.listen(PORT, async () => {
     console.warn('⚠️  ADMIN_KEY non définie — les routes de contrôle du bot (start/stop/report) refuseront toutes les requêtes tant que cette variable n\'est pas configurée.');
   }
 
-  // Initialiser et démarrer le scanner automatique de signaux
+  // Initialiser le scanner automatique
   autoScanner.init(getPrices, findArbitrageOpportunities, EXCHANGE_IDS);
-  autoScanner.start();
+
+  // Précharger les marchés un par un (évite le pic mémoire), PUIS démarrer
+  // le scan automatique — sans bloquer le reste du démarrage du serveur.
+  warmupExchanges(EXCHANGE_IDS).then(() => autoScanner.start());
 
   // ── REDÉMARRAGE AUTOMATIQUE DU BOT ────────────────────────────────────────
   const savedConfig = loadBotConfig();
