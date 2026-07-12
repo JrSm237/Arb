@@ -517,13 +517,16 @@ function renderTrades(trades) {
     return;
   }
   el.innerHTML = trades.slice(0,20).map(t => {
-    const ok = t.status === 'success';
-    return `<div style="background:var(--card);border:1px solid ${ok?'rgba(0,245,160,.2)':'rgba(255,107,53,.2)'};border-radius:7px;padding:11px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center">
-      <div style="font-size:1rem">${ok?'✅':'❌'}</div>
+    const ok      = t.status === 'success';
+    const partial = t.status === 'partial';
+    const border  = partial ? 'rgba(255,0,0,.5)' : ok ? 'rgba(0,245,160,.2)' : 'rgba(255,107,53,.2)';
+    const icon    = partial ? '🚨' : ok ? '✅' : '❌';
+    return `<div style="background:${partial?'rgba(255,0,0,.06)':'var(--card)'};border:1px solid ${border};border-radius:7px;padding:11px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center">
+      <div style="font-size:1rem">${icon}</div>
       <div>
-        <div style="font-family:var(--mono);font-weight:700;font-size:.86rem;margin-bottom:2px">${t.symbol}</div>
+        <div style="font-family:var(--mono);font-weight:700;font-size:.86rem;margin-bottom:2px">${t.symbol}${partial?' — EXÉCUTION PARTIELLE':''}</div>
         <div style="font-family:var(--mono);font-size:.67rem;color:var(--muted)">${t.buyExchange} <span style="color:var(--green)">→</span> ${t.sellExchange} · ${new Date(t.timestamp).toLocaleString('fr')}</div>
-        ${t.error?`<div style="font-family:var(--mono);font-size:.65rem;color:var(--orange)">${t.error}</div>`:''}
+        ${t.error?`<div style="font-family:var(--mono);font-size:.65rem;color:${partial?'#ff4444':'var(--orange)'}">${t.error}</div>`:''}
       </div>
       <div style="text-align:right">
         <div style="font-family:var(--mono);font-weight:700;font-size:.92rem;color:${ok?'var(--green)':'var(--orange)'}">${ok?'+'+t.pnl.toFixed(4):'-'} USDT</div>
