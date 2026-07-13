@@ -79,12 +79,22 @@ automatiquement avec la même config (position ouverte comprise).
 | Commande | Action |
 |---|---|
 | `/help` | Liste des commandes |
-| `/status` | État du bot, PnL, balances |
+| `/status` | État du bot, PnL, balances, position ouverte |
 | `/start_bot` | Relancer le bot (dernière config sauvegardée) |
 | `/stop_bot` | Arrêter le bot |
+| `/close_position` | Clôturer la position en cours immédiatement, quel que soit le gain/perte |
 | `/rapport` | Rapport complet |
+| `/config` | Voir la configuration actuelle |
+| `/spread <valeur>` | Changer l'écart minimum à chaud, ex: `/spread 2.5` |
+| `/stoploss <valeur>` | Changer le stop-loss à chaud, ex: `/stoploss 5` |
+| `/capital <c1> <c2>` | Changer le capital par exchange, ex: `/capital 10 15` |
+| `/pair <SYMBOL>` | Changer de paire (si aucune position ouverte), ex: `/pair BTC/USDT` |
+| `/mode sim` / `/mode prod` | Basculer Simulation/Production (si aucune position ouverte) |
 | `/ping` | Vérifier que le serveur tourne |
 | `/keepalive_on` / `/keepalive_off` | Ping auto toutes les 13 min (utile sur un hébergement gratuit qui met en veille) |
+
+Toutes les commandes de configuration à chaud sont sauvegardées automatiquement — elles survivent
+à un redémarrage du serveur.
 
 ## Routes API
 
