@@ -85,7 +85,8 @@ async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
 /spread \\<valeur\\> — Écart minimum, ex: \`/spread 2.5\`
 /stoploss \\<valeur\\> — Stop-loss, ex: \`/stoploss 5\`
 /capital \\<c1\\> \\<c2\\> — Capital par exchange, ex: \`/capital 10 15\`
-/pair \\<SYMBOL\\> — Changer de paire, ex: \`/pair BTC/USDT\`
+/watchlist \\<paires\\> — Paires surveillées, ex: \`/watchlist BTC/USDT,ETH/USDT,SOL/USDT\`
+/historique — Statistiques d'écart par paire (pour juger lesquelles valent le coup)
 /mode sim|prod — Basculer Simulation/Production
 
 🔧 *Serveur*
@@ -140,7 +141,7 @@ async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
     await send(chatId, `📊 *Statut ArbiScan Bot*
 
 🤖 *État :* ${state.running ? '🟢 Actif' : '🔴 Arrêté'}
-💎 *Paire :* \`${cfg.selectedPair || '—'}\`
+💎 *Paires :* \`${(cfg.watchlist||[]).join(', ') || '—'}\`
 🏦 *Exchanges :* \`${ex1.toUpperCase()} ↔ ${ex2.toUpperCase()}\`
 🎯 *Mode :* ${cfg.dryRun ? '🧪 Simulation' : '💰 Production'}
 📈 *Écart min :* ${cfg.minSpreadPct || 2}% · 🛑 *Stop-loss :* ${cfg.stopLossPct || 5}%
@@ -168,7 +169,7 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
       await send(chatId, `❌ *Aucune configuration sauvegardée*\n\nDémarrez le bot une première fois depuis le site pour sauvegarder la config :\n${APP_URL}`);
       return;
     }
-    await send(chatId, `⏳ *Démarrage du bot...*\n\nPaire : \`${savedConfig.pair}\`\nExchanges : \`${savedConfig.exchange1?.toUpperCase()} ↔ ${savedConfig.exchange2?.toUpperCase()}\``);
+    await send(chatId, `⏳ *Démarrage du bot...*\n\nPaires : \`${(savedConfig.watchlist||[]).join(', ')}\`\nExchanges : \`${savedConfig.exchange1?.toUpperCase()} ↔ ${savedConfig.exchange2?.toUpperCase()}\``);
     try {
       await tradeBot.start(savedConfig);
       await send(chatId, `✅ *Bot démarré avec succès !*\n\nIl tourne maintenant en arrière-plan. Utilisez /status pour suivre son activité.`);
@@ -197,7 +198,7 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
     await send(chatId, `⚙️ *Configuration actuelle*
 
 🏦 *Exchanges :* \`${cfg.exchange1?.toUpperCase() || '—'} ↔ ${cfg.exchange2?.toUpperCase() || '—'}\`
-💎 *Paire :* \`${cfg.pair || '—'}\`
+💎 *Paires :* \`${(cfg.watchlist||[]).join(', ') || '—'}\`
 💵 *Capital :* ${cfg.capital1} / ${cfg.capital2} USDT
 📈 *Écart min :* ${cfg.minSpreadPct}%
 🛑 *Stop-loss :* ${cfg.stopLossPct}%
@@ -207,7 +208,7 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
 /spread \\<valeur\\> — écart minimum (%)
 /stoploss \\<valeur\\> — stop-loss (%)
 /capital \\<c1\\> \\<c2\\> — capital par exchange
-/pair \\<SYMBOL\\> — ex: BTC/USDT
+/watchlist \\<paires\\> — ex: BTC/USDT,ETH/USDT
 /mode sim|prod — changer de mode
 /close\\_position — clôturer la position en cours`);
     return;
@@ -253,21 +254,45 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
     return;
   }
 
-  // ── /pair <SYMBOL> ────────────────────────────────────────────────────────
-  if (text.startsWith('/pair')) {
-    const sym = (msg.text.split(' ')[1] || '').trim().toUpperCase();
-    if (!/^[A-Z0-9]+\/USDT$/.test(sym)) {
-      await send(chatId, '⚠️ Usage : `/pair BTC/USDT` (doit finir par /USDT)');
+  // ── /watchlist <paires séparées par virgules> ────────────────────────────────
+  if (text.startsWith('/watchlist')) {
+    const arg = (msg.text.split(' ').slice(1).join(' ') || '').trim();
+    if (!arg) {
+      const cfg = tradeBot.getConfig();
+      await send(chatId, `👁 *Watchlist actuelle*\n\n${(cfg.watchlist||[]).map(p=>`• \`${p}\``).join('\n') || '—'}\n\n_Pour changer :_ \`/watchlist BTC/USDT,ETH/USDT,SOL/USDT\``);
+      return;
+    }
+    const pairs = arg.split(',').map(p => p.trim().toUpperCase()).filter(Boolean);
+    const invalid = pairs.filter(p => !/^[A-Z0-9]+\/USDT$/.test(p));
+    if (!pairs.length || invalid.length) {
+      await send(chatId, `⚠️ Format invalide${invalid.length ? ' : '+invalid.join(', ') : ''}. Usage : \`/watchlist BTC/USDT,ETH/USDT,SOL/USDT\` (séparées par des virgules, finissant par /USDT)`);
       return;
     }
     const state = await tradeBot.getState();
     if (state.position) {
-      await send(chatId, `⚠️ Impossible de changer de paire : une position est ouverte sur \`${state.position.symbol}\`. Utilisez /close\\_position d'abord.`);
+      await send(chatId, `⚠️ Impossible de changer la watchlist : une position est ouverte sur \`${state.position.symbol}\`. Utilisez /close\\_position d'abord.`);
       return;
     }
-    const applied = tradeBot.updateConfig({ pair: sym });
-    persistLiveConfig(loadBotConfig, saveBotConfig, { pair: applied.pair });
-    await send(chatId, `✅ Paire mise à jour : *${applied.pair}*`);
+    const applied = tradeBot.updateConfig({ watchlist: pairs });
+    persistLiveConfig(loadBotConfig, saveBotConfig, { watchlist: applied.watchlist });
+    await send(chatId, `✅ Watchlist mise à jour (${applied.watchlist.length} paire(s)) :\n${applied.watchlist.map(p=>`• \`${p}\``).join('\n')}`);
+    return;
+  }
+
+  // ── /historique — stats d'écart par paire surveillée ────────────────────────
+  if (text === '/historique' || text === '/spreads') {
+    const state = await tradeBot.getState();
+    const stats = state.spreadStats || {};
+    const entries = Object.entries(stats);
+    if (!entries.length) {
+      await send(chatId, 'ℹ️ Pas encore assez de données. Laisse le bot tourner un moment (même en Simulation) pour accumuler l\'historique des écarts par paire.');
+      return;
+    }
+    entries.sort((a, b) => b[1].avgSpreadPct - a[1].avgSpreadPct);
+    const lines = entries.map(([symbol, s]) =>
+      `💎 \`${symbol}\`\n   Moyen: ${s.avgSpreadPct.toFixed(2)}% · Max: ${s.maxSpreadPct.toFixed(2)}% · ${s.pctAboveThreshold.toFixed(0)}% du temps au-dessus du seuil\n   (${s.samples} échantillons sur ${s.oldestSampleAgeH.toFixed(1)}h)`
+    ).join('\n\n');
+    await send(chatId, `📊 *Historique des écarts par paire*\n\n${lines}\n\n_Plus "% du temps au-dessus du seuil" est élevé, plus la paire déclenche souvent des trades._`);
     return;
   }
 

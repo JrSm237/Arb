@@ -17,7 +17,7 @@ const TELEGRAM_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
 const CONFIG = {
   MIN_SPREAD_PCT: parseFloat(process.env.MIN_SPREAD_PCT || '2.0'), // seuil pour ACHETER (écart entre exchanges) ET pour VENDRE (gain net visé)
   STOP_LOSS_PCT:  parseFloat(process.env.STOP_LOSS_PCT  || '5.0'), // coupe la position si elle perd plus que ça
-  SELECTED_PAIR:  null,
+  WATCHLIST:      ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT'], // paires surveillées pour l'entrée
   EXCHANGE_1:     null,   // ex: 'kucoin' — choisi dynamiquement depuis le site
   EXCHANGE_2:     null,   // ex: 'bybit'
   CAPITAL_1:      parseFloat(process.env.CAPITAL_PER_LEG || '10'),
@@ -75,6 +75,7 @@ const state = {
   activeTrade:   null, // verrou anti-chevauchement pendant qu'un ordre est en vol
   position:      null, // { exchange, quantity, entryPrice, entryCost, entryTime } — null si pas de position ouverte
   tradeHistory:  [],
+  spreadHistory: {}, // { 'BTC/USDT': [{ts, spreadPct}, ...], ... }
 };
 
 // ── FORMATAGE PRIX (précision dynamique — évite "$0.0000" pour BONK/PEPE...) ──
@@ -211,28 +212,139 @@ function shouldAlertFunds() {
   return false;
 }
 
-// ── ENTRÉE EN POSITION : ACHETER SUR L'EXCHANGE LE MOINS CHER ───────────────
-async function evaluateEntry(symbol) {
-  const [t1, t2] = await Promise.all([
-    fetchTicker(CONFIG.EXCHANGE_1, symbol),
-    fetchTicker(CONFIG.EXCHANGE_2, symbol),
-  ]);
-  if (!t1 || !t2) return;
+// ── PROFONDEUR DU CARNET D'ORDRES ─────────────────────────────────────────────
+// Le "prix" affiché par le ticker n'est que le TOUT premier niveau du carnet.
+// Un ordre de plusieurs $ sur un actif peu liquide peut "manger" plusieurs
+// niveaux et se remplir à un prix bien pire. On calcule le prix moyen pondéré
+// réel qu'on obtiendrait pour la quantité voulue, avant d'entrer en position.
+async function getEffectivePrice(exchangeId, symbol, side, amount) {
+  try {
+    const ex = ensurePublicExchange(exchangeId);
+    const ob = await ex.fetchOrderBook(symbol, 20);
+    const levels = side === 'buy' ? ob.asks : ob.bids;
+    if (!levels || !levels.length) return null;
 
-  const p1 = t1.ask || t1.last;
-  const p2 = t2.ask || t2.last;
-  if (!p1 || !p2) return;
+    let remaining = amount, cost = 0, filled = 0;
+    for (const [price, qty] of levels) {
+      const take = Math.min(remaining, qty);
+      cost += take * price;
+      filled += take;
+      remaining -= take;
+      if (remaining <= 0) break;
+    }
+    if (remaining > 0) {
+      // Carnet pas assez profond dans les 20 premiers niveaux — on complète
+      // avec le pire prix vu (hypothèse pessimiste plutôt que de sous-estimer).
+      const lastPrice = levels[levels.length - 1][0];
+      cost += remaining * lastPrice;
+      filled += remaining;
+    }
+    return filled > 0 ? cost / filled : null;
+  } catch (e) {
+    console.log(`[orderbook] ${exchangeId} ${symbol}: ${e.message}`);
+    return null; // en cas d'échec, l'appelant retombe sur le prix du ticker
+  }
+}
 
-  // Quel exchange est le moins cher ?
-  const cheaper  = p1 <= p2 ? CONFIG.EXCHANGE_1 : CONFIG.EXCHANGE_2;
-  const cheapPrice  = Math.min(p1, p2);
-  const pricePrice  = Math.max(p1, p2);
-  const spreadPct = ((pricePrice - cheapPrice) / cheapPrice) * 100;
+// ── HISTORIQUE DES ÉCARTS (pour juger quelles paires valent le coup) ────────
+const SPREAD_HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours
+function recordSpreadSample(symbol, spreadPct) {
+  if (!state.spreadHistory[symbol]) state.spreadHistory[symbol] = [];
+  const hist = state.spreadHistory[symbol];
+  hist.push({ ts: Date.now(), spreadPct });
+  const cutoff = Date.now() - SPREAD_HISTORY_MAX_AGE_MS;
+  while (hist.length && hist[0].ts < cutoff) hist.shift();
+  if (hist.length > 2000) hist.splice(0, hist.length - 2000);
+}
 
-  if (spreadPct < CONFIG.MIN_SPREAD_PCT) return; // écart pas assez intéressant pour se positionner
+function getSpreadStats() {
+  const stats = {};
+  for (const [symbol, hist] of Object.entries(state.spreadHistory)) {
+    if (!hist.length) continue;
+    const spreads = hist.map(h => h.spreadPct);
+    const avg = spreads.reduce((a, b) => a + b, 0) / spreads.length;
+    const max = Math.max(...spreads);
+    const aboveThreshold = spreads.filter(s => s >= CONFIG.MIN_SPREAD_PCT).length;
+    stats[symbol] = {
+      samples: hist.length,
+      avgSpreadPct: avg,
+      maxSpreadPct: max,
+      pctAboveThreshold: (aboveThreshold / hist.length) * 100,
+      oldestSampleAgeH: (Date.now() - hist[0].ts) / 3600000,
+    };
+  }
+  return stats;
+}
 
+// Échantillonne rapidement l'écart de toutes les paires de la watchlist,
+// même celles non activement tradées — pour bâtir l'historique.
+async function sampleWatchlistSpreads() {
+  for (const symbol of CONFIG.WATCHLIST) {
+    try {
+      const [t1, t2] = await Promise.all([
+        fetchTicker(CONFIG.EXCHANGE_1, symbol),
+        fetchTicker(CONFIG.EXCHANGE_2, symbol),
+      ]);
+      if (!t1 || !t2) continue;
+      const p1 = t1.ask || t1.last, p2 = t2.ask || t2.last;
+      if (!p1 || !p2) continue;
+      const spreadPct = (Math.max(p1, p2) - Math.min(p1, p2)) / Math.min(p1, p2) * 100;
+      recordSpreadSample(symbol, spreadPct);
+    } catch { /* on ignore une paire qui échoue, les autres continuent */ }
+  }
+}
+
+// ── ENTRÉE EN POSITION : ACHETER SUR LE MEILLEUR CANDIDAT DE LA WATCHLIST ────
+async function evaluateEntry() {
+  let best = null; // { symbol, cheaper, pricier, cheapPrice, pricePrice, spreadPct, effectiveSpreadPct }
+
+  for (const symbol of CONFIG.WATCHLIST) {
+    const [t1, t2] = await Promise.all([
+      fetchTicker(CONFIG.EXCHANGE_1, symbol),
+      fetchTicker(CONFIG.EXCHANGE_2, symbol),
+    ]);
+    if (!t1 || !t2) continue;
+
+    const p1 = t1.ask || t1.last;
+    const p2 = t2.ask || t2.last;
+    if (!p1 || !p2) continue;
+
+    const cheaper = p1 <= p2 ? CONFIG.EXCHANGE_1 : CONFIG.EXCHANGE_2;
+    const pricier  = cheaper === CONFIG.EXCHANGE_1 ? CONFIG.EXCHANGE_2 : CONFIG.EXCHANGE_1;
+    const cheapPrice = Math.min(p1, p2);
+    const pricePrice = Math.max(p1, p2);
+    const spreadPct  = ((pricePrice - cheapPrice) / cheapPrice) * 100;
+
+    recordSpreadSample(symbol, spreadPct);
+
+    if (spreadPct < CONFIG.MIN_SPREAD_PCT) continue; // filtre rapide avant de vérifier la profondeur (économise des appels réseau)
+
+    if (!best || spreadPct > best.spreadPct) {
+      best = { symbol, cheaper, pricier, cheapPrice, pricePrice, spreadPct };
+    }
+  }
+
+  if (!best) return; // aucune paire de la watchlist n'a un écart suffisant ce cycle
+
+  const { symbol, cheaper, pricier, cheapPrice } = best;
   const capital = capitalFor(cheaper);
   const amount  = capital / cheapPrice;
+
+  // ── VÉRIFICATION DE PROFONDEUR ──────────────────────────────────────────────
+  // Le spread au meilleur prix affiché peut ne pas être exécutable en entier à
+  // notre taille. On recalcule le spread avec le prix moyen pondéré réel.
+  const [effBuyPrice, effSellPrice] = await Promise.all([
+    getEffectivePrice(cheaper, symbol, 'buy',  amount),
+    getEffectivePrice(pricier, symbol, 'sell', amount),
+  ]);
+  const realBuyPrice  = effBuyPrice  || cheapPrice;
+  const realSellPrice = effSellPrice || best.pricePrice;
+  const effectiveSpreadPct = ((realSellPrice - realBuyPrice) / realBuyPrice) * 100;
+
+  if (effectiveSpreadPct < CONFIG.MIN_SPREAD_PCT) {
+    console.log(`⚠ ${symbol}: écart affiché +${best.spreadPct.toFixed(2)}% mais +${effectiveSpreadPct.toFixed(2)}% une fois la profondeur du carnet prise en compte — carnet trop fin, on n'entre pas`);
+    return;
+  }
 
   const minCheck = orderMeetsMinimum(cheaper, symbol, amount, cheapPrice);
   if (!minCheck.ok) {
@@ -253,7 +365,7 @@ async function evaluateEntry(symbol) {
   state.activeTrade = true;
 
   try {
-    console.log(`🎯 Entrée: achat sur ${cheaper} @ ${fmtPrice(cheapPrice)} (écart +${spreadPct.toFixed(2)}%)`);
+    console.log(`🎯 Entrée: achat ${symbol} sur ${cheaper} @ ${fmtPrice(cheapPrice)} (écart affiché +${best.spreadPct.toFixed(2)}%, réel +${effectiveSpreadPct.toFixed(2)}%)`);
     const order = await placeMarketOrder(cheaper, symbol, 'buy', amount);
     const filled     = order.filled  || amount;
     const entryPrice = order.average || (order.cost && order.filled ? order.cost / order.filled : cheapPrice);
@@ -277,9 +389,9 @@ async function evaluateEntry(symbol) {
 
     await tg(`🟢 *POSITION OUVERTE*
 
-💎 *Paire :* \`${symbol}\`
+💎 *Paire :* \`${symbol}\` _(sélectionnée parmi ${CONFIG.WATCHLIST.length} paires surveillées)_
 🏦 *Achat sur :* \`${cheaper}\`
-📈 *Écart détecté :* +${spreadPct.toFixed(2)}% vs l'autre exchange
+📈 *Écart détecté :* +${best.spreadPct.toFixed(2)}% (affiché) · +${effectiveSpreadPct.toFixed(2)}% (réel, profondeur du carnet vérifiée)
 💵 *Prix d'entrée :* $${fmtPrice(entryPrice)}
 📦 *Quantité :* ${filled.toFixed(6)}
 💰 *Coût :* ${(filled*entryPrice).toFixed(4)} USDT
@@ -424,13 +536,12 @@ async function scanAndTrade() {
   if (!CONFIG.EXCHANGE_1 || !CONFIG.EXCHANGE_2) return;
   state.lastScan = new Date();
 
-  const symbol = CONFIG.SELECTED_PAIR || 'BTC/USDT';
-
   try {
     if (state.position) {
-      await evaluateExit(symbol);
+      await evaluateExit(state.position.symbol);
+      sampleWatchlistSpreads().catch(() => {}); // continue d'alimenter l'historique même en position
     } else {
-      await evaluateEntry(symbol);
+      await evaluateEntry(); // scanne toute la watchlist, prend le meilleur candidat (échantillonne aussi au passage)
     }
   } catch (e) {
     console.error('Scan error:', e.message);
@@ -489,7 +600,13 @@ async function start(dynamicConfig = {}) {
   CONFIG.MIN_SPREAD_PCT = dynamicConfig.minSpreadPct != null ? parseFloat(dynamicConfig.minSpreadPct) : CONFIG.MIN_SPREAD_PCT;
   CONFIG.STOP_LOSS_PCT  = dynamicConfig.stopLossPct  != null ? parseFloat(dynamicConfig.stopLossPct)  : CONFIG.STOP_LOSS_PCT;
   CONFIG.DRY_RUN        = dynamicConfig.dryRun !== undefined ? !!dynamicConfig.dryRun : CONFIG.DRY_RUN;
-  CONFIG.SELECTED_PAIR  = dynamicConfig.pair || null;
+  // Accepte soit une liste (dynamicConfig.watchlist = ['BTC/USDT', ...]) soit
+  // encore l'ancien champ `pair` unique (rétrocompatibilité) — converti en liste à 1 élément.
+  if (Array.isArray(dynamicConfig.watchlist) && dynamicConfig.watchlist.length) {
+    CONFIG.WATCHLIST = dynamicConfig.watchlist.map(p => p.toUpperCase());
+  } else if (dynamicConfig.pair) {
+    CONFIG.WATCHLIST = [dynamicConfig.pair.toUpperCase()];
+  }
 
   ensurePublicExchange(CONFIG.EXCHANGE_1);
   ensurePublicExchange(CONFIG.EXCHANGE_2);
@@ -511,7 +628,7 @@ async function start(dynamicConfig = {}) {
 
   console.log('\n🤖 ArbiScan Trade Bot démarré');
   console.log(`   Exchanges    : ${CONFIG.EXCHANGE_1.toUpperCase()} + ${CONFIG.EXCHANGE_2.toUpperCase()}`);
-  console.log(`   Paire        : ${CONFIG.SELECTED_PAIR || 'BTC/USDT'}`);
+  console.log(`   Paires       : ${CONFIG.WATCHLIST.join(', ')}`);
   console.log(`   Spread min   : ${CONFIG.MIN_SPREAD_PCT}%`);
   console.log(`   Stop-loss    : -${CONFIG.STOP_LOSS_PCT}%`);
   console.log(`   Capital ${CONFIG.EXCHANGE_1.toUpperCase()}  : ${CONFIG.CAPITAL_1} USDT`);
@@ -529,7 +646,7 @@ async function start(dynamicConfig = {}) {
     await tg(`🚀 *ArbiScan Bot DÉMARRÉ*
 
 🤖 *Mode :* ${CONFIG.DRY_RUN ? '🧪 Simulation' : '💰 Production'}
-💎 *Paire :* ${CONFIG.SELECTED_PAIR || 'BTC/USDT'}
+💎 *Paires surveillées :* ${CONFIG.WATCHLIST.join(', ')}
 🏦 *Exchanges :* ${ex1Label} ↔ ${ex2Label}
 📈 *Entrée si écart ≥ :* ${CONFIG.MIN_SPREAD_PCT}%
 🎯 *Sortie si gain net ≥ :* ${CONFIG.MIN_SPREAD_PCT}%
@@ -603,14 +720,15 @@ async function getState() {
       minSpreadPct: CONFIG.MIN_SPREAD_PCT,
       stopLossPct:  CONFIG.STOP_LOSS_PCT,
       dryRun:       CONFIG.DRY_RUN,
-      selectedPair: CONFIG.SELECTED_PAIR || 'BTC/USDT',
+      watchlist:    CONFIG.WATCHLIST,
       scanIntervalSec: CONFIG.SCAN_INTERVAL / 1000,
-    }
+    },
+    spreadStats: getSpreadStats(),
   };
 }
 
 // ── MODIFIER LA CONFIG À CHAUD (sans redémarrer le bot) ──────────────────────
-// Utilisé par les commandes Telegram /spread, /stoploss, /capital, /pair, /mode
+// Utilisé par les commandes Telegram /spread, /stoploss, /capital, /watchlist, /mode
 function updateConfig(partial = {}) {
   const applied = {};
   if (partial.minSpreadPct != null && !isNaN(partial.minSpreadPct)) {
@@ -629,9 +747,12 @@ function updateConfig(partial = {}) {
     CONFIG.CAPITAL_2 = parseFloat(partial.capital2);
     applied.capital2 = CONFIG.CAPITAL_2;
   }
-  if (partial.pair) {
-    CONFIG.SELECTED_PAIR = partial.pair.toUpperCase();
-    applied.pair = CONFIG.SELECTED_PAIR;
+  if (Array.isArray(partial.watchlist) && partial.watchlist.length) {
+    CONFIG.WATCHLIST = partial.watchlist.map(p => p.toUpperCase());
+    applied.watchlist = CONFIG.WATCHLIST;
+  } else if (partial.pair) {
+    CONFIG.WATCHLIST = [partial.pair.toUpperCase()];
+    applied.watchlist = CONFIG.WATCHLIST;
   }
   if (partial.dryRun != null) {
     CONFIG.DRY_RUN = !!partial.dryRun;
@@ -645,7 +766,7 @@ function getConfig() {
     exchange1: CONFIG.EXCHANGE_1, exchange2: CONFIG.EXCHANGE_2,
     capital1: CONFIG.CAPITAL_1, capital2: CONFIG.CAPITAL_2,
     minSpreadPct: CONFIG.MIN_SPREAD_PCT, stopLossPct: CONFIG.STOP_LOSS_PCT,
-    dryRun: CONFIG.DRY_RUN, pair: CONFIG.SELECTED_PAIR,
+    dryRun: CONFIG.DRY_RUN, watchlist: CONFIG.WATCHLIST,
   };
 }
 
@@ -656,4 +777,4 @@ function clearPosition() {
   return had;
 }
 
-module.exports = { start, stop, getState, sendWeeklyReport, fetchBalances, sellPosition, clearPosition, updateConfig, getConfig };
+module.exports = { start, stop, getState, sendWeeklyReport, fetchBalances, sellPosition, clearPosition, updateConfig, getConfig, getSpreadStats };

@@ -34,7 +34,7 @@ const BOT_CONFIG_FILE = path.join(__dirname, '..', 'bot_config.json');
 function saveBotConfig(config) {
   try {
     const toSave = {
-      pair:         config.pair,
+      watchlist:    config.watchlist || (config.pair ? [config.pair] : undefined),
       exchange1:    config.exchange1,
       exchange2:    config.exchange2,
       capital1:     config.capital1,
@@ -61,7 +61,7 @@ function loadBotConfig() {
     const raw = fs.readFileSync(BOT_CONFIG_FILE, 'utf8');
     const cfg = JSON.parse(raw);
     if (cfg.apiConfigs) cfg.apiConfigs = decodeAPIs(cfg.apiConfigs);
-    console.log('📂 Config bot restaurée:', cfg.pair, cfg.exchange1, '↔', cfg.exchange2);
+    console.log('📂 Config bot restaurée:', (cfg.watchlist||[]).join(','), cfg.exchange1, '↔', cfg.exchange2);
     return cfg;
   } catch(e) {
     console.error('Erreur chargement config bot:', e.message);
@@ -171,7 +171,7 @@ app.post('/api/bot/test-connections', requireAdminKey, async (req, res) => {
 
 // POST /api/bot/start — démarrer le bot avec config dynamique (2 exchanges au choix parmi 4)
 app.post('/api/bot/start', requireAdminKey, async (req, res) => {
-  const { pair, exchange1, exchange2, apiConfigs, capital1, capital2, minSpreadPct, stopLossPct, dryRun } = req.body;
+  const { pair, watchlist, exchange1, exchange2, apiConfigs, capital1, capital2, minSpreadPct, stopLossPct, dryRun } = req.body;
 
   if (!exchange1 || !exchange2) {
     return res.status(400).json({ error: 'Sélectionnez deux exchanges (exchange1, exchange2)' });
@@ -179,9 +179,13 @@ app.post('/api/bot/start', requireAdminKey, async (req, res) => {
   if (!EXCHANGE_IDS.includes(exchange1) || !EXCHANGE_IDS.includes(exchange2)) {
     return res.status(400).json({ error: `Exchanges supportés par ce bot : ${EXCHANGE_IDS.join(', ')}` });
   }
+  const finalWatchlist = Array.isArray(watchlist) && watchlist.length ? watchlist : (pair ? [pair] : null);
+  if (!finalWatchlist || !finalWatchlist.length) {
+    return res.status(400).json({ error: 'Indiquez au moins une paire à surveiller (watchlist)' });
+  }
 
   const config = {
-    pair, exchange1, exchange2, apiConfigs,
+    watchlist: finalWatchlist, exchange1, exchange2, apiConfigs,
     capital1:     parseFloat(capital1) || 10,
     capital2:     parseFloat(capital2) || 10,
     minSpreadPct: parseFloat(minSpreadPct) || 2.0,
@@ -195,7 +199,7 @@ app.post('/api/bot/start', requireAdminKey, async (req, res) => {
     const modeLabel = config.dryRun ? '🧪 Simulation' : '💰 Production';
     res.json({
       success: true,
-      message: `✅ Bot démarré — ${modeLabel} | ${exchange1.toUpperCase()}: ${config.capital1} USDT | ${exchange2.toUpperCase()}: ${config.capital2} USDT | Spread min: ${config.minSpreadPct}%`
+      message: `✅ Bot démarré — ${modeLabel} | ${finalWatchlist.length} paire(s) surveillée(s) | ${exchange1.toUpperCase()}: ${config.capital1} USDT | ${exchange2.toUpperCase()}: ${config.capital2} USDT | Spread min: ${config.minSpreadPct}%`
     });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -229,6 +233,11 @@ app.get('/api/bot/balances', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// GET /api/bot/spread-history — stats d'écart par paire surveillée (pour juger lesquelles valent le coup)
+app.get('/api/bot/spread-history', (req, res) => {
+  res.json(tradeBot.getSpreadStats());
 });
 
 // POST /api/bot/report — envoyer rapport manuellement
@@ -290,13 +299,13 @@ app.listen(PORT, async () => {
     console.log('🔄 Redémarrage automatique du bot...');
     try {
       await tradeBot.start({ ...savedConfig, resetStats: false });
-      console.log(`✅ Bot relancé automatiquement sur ${savedConfig.pair || 'multi-paires'}`);
+      console.log(`✅ Bot relancé automatiquement sur ${(savedConfig.watchlist||[]).join(', ') || 'multi-paires'}`);
 
       await sendTelegram(`🔄 *ArbiScan Bot — Redémarrage automatique*
 
 Le serveur a redémarré et le bot a été relancé automatiquement.
 
-💎 *Paire :* ${savedConfig.pair || 'Multi-paires'}
+💎 *Paires :* ${(savedConfig.watchlist||[]).join(', ') || 'Multi-paires'}
 🏦 *Exchanges :* ${savedConfig.exchange1?.toUpperCase()} ↔ ${savedConfig.exchange2?.toUpperCase()}
 🤖 *Mode :* ${savedConfig.dryRun ? '🧪 Simulation' : '💰 Production'}
 
