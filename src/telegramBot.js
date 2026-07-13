@@ -290,7 +290,7 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
     }
     entries.sort((a, b) => b[1].avgSpreadPct - a[1].avgSpreadPct);
     const lines = entries.map(([symbol, s]) =>
-      `💎 \`${symbol}\`\n   Moyen: ${s.avgSpreadPct.toFixed(2)}% · Max: ${s.maxSpreadPct.toFixed(2)}% · ${s.pctAboveThreshold.toFixed(0)}% du temps au-dessus du seuil\n   (${s.samples} échantillons sur ${s.oldestSampleAgeH.toFixed(1)}h)`
+      `💎 \`${symbol}\`\n   Brut moyen: ${s.avgSpreadPct.toFixed(2)}% · Net moyen: ${s.avgNetSpreadPct>=0?'+':''}${s.avgNetSpreadPct.toFixed(2)}% · Max: ${s.maxSpreadPct.toFixed(2)}%\n   ${s.pctAboveThreshold.toFixed(0)}% du temps au-dessus du seuil net (${s.samples} échantillons sur ${s.oldestSampleAgeH.toFixed(1)}h)`
     ).join('\n\n');
     await send(chatId, `📊 *Historique des écarts par paire*\n\n${lines}\n\n_Plus "% du temps au-dessus du seuil" est élevé, plus la paire déclenche souvent des trades._`);
     return;

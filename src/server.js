@@ -42,6 +42,7 @@ function saveBotConfig(config) {
       minSpreadPct: config.minSpreadPct,
       stopLossPct:  config.stopLossPct,
       dryRun:       config.dryRun,
+      position:     config.position || null, // position ouverte au moment de la sauvegarde, pour la restaurer après un redémarrage
       // Encodage simple (base64) — évite l'exposition en clair dans les logs.
       // Ce n'est PAS un chiffrement fort : bot_config.json ne doit jamais être exposé publiquement.
       apiConfigs: config.apiConfigs ? encodeAPIs(config.apiConfigs) : null,
@@ -301,6 +302,10 @@ app.listen(PORT, async () => {
       await tradeBot.start({ ...savedConfig, resetStats: false });
       console.log(`✅ Bot relancé automatiquement sur ${(savedConfig.watchlist||[]).join(', ') || 'multi-paires'}`);
 
+      const posLine = savedConfig.position
+        ? `\n🟢 *Position restaurée :* \`${savedConfig.position.exchange}\` — ${savedConfig.position.quantity} ${savedConfig.position.symbol}\n`
+        : '';
+
       await sendTelegram(`🔄 *ArbiScan Bot — Redémarrage automatique*
 
 Le serveur a redémarré et le bot a été relancé automatiquement.
@@ -308,7 +313,7 @@ Le serveur a redémarré et le bot a été relancé automatiquement.
 💎 *Paires :* ${(savedConfig.watchlist||[]).join(', ') || 'Multi-paires'}
 🏦 *Exchanges :* ${savedConfig.exchange1?.toUpperCase()} ↔ ${savedConfig.exchange2?.toUpperCase()}
 🤖 *Mode :* ${savedConfig.dryRun ? '🧪 Simulation' : '💰 Production'}
-
+${posLine}
 _Le bot continue de fonctionner en arrière-plan._`);
 
     } catch(e) {
@@ -318,6 +323,24 @@ _Le bot continue de fonctionner en arrière-plan._`);
   } else {
     console.log('ℹ Bot non configuré — en attente de démarrage via le site');
   }
+
+  // Sauvegarde la position en continu pendant que le bot tourne, pour pouvoir
+  // la restaurer si le serveur redémarre en cours de route (démarrage manuel
+  // ou automatique). ⚠️ Sur un hébergement à disque éphémère (ex: Render
+  // gratuit), ce fichier peut malgré tout être effacé au redémarrage — voir
+  // le README pour les hébergements où ça marche vraiment.
+  setInterval(async () => {
+    try {
+      const st = await tradeBot.getState();
+      if (!st.running) return;
+      const current = loadBotConfig();
+      if (!current) return;
+      const posChanged = JSON.stringify(current.position || null) !== JSON.stringify(st.position || null);
+      if (posChanged) {
+        saveBotConfig({ ...current, position: st.position || null });
+      }
+    } catch (e) { console.error('Persist position error:', e.message); }
+  }, 20000);
 
   // Message de démarrage Telegram
   if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {

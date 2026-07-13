@@ -76,7 +76,17 @@ const state = {
   position:      null, // { exchange, quantity, entryPrice, entryCost, entryTime } — null si pas de position ouverte
   tradeHistory:  [],
   spreadHistory: {}, // { 'BTC/USDT': [{ts, spreadPct}, ...], ... }
+  simBalances:   {}, // soldes simulés en mode DRY_RUN — complètement séparés des vrais soldes
 };
+
+function initSimBalancesIfNeeded() {
+  if (!CONFIG.DRY_RUN) return;
+  for (const id of [CONFIG.EXCHANGE_1, CONFIG.EXCHANGE_2]) {
+    if (id && !state.simBalances[id]) {
+      state.simBalances[id] = { USDT: capitalFor(id), free: {} };
+    }
+  }
+}
 
 // ── FORMATAGE PRIX (précision dynamique — évite "$0.0000" pour BONK/PEPE...) ──
 function fmtPrice(p) {
@@ -259,16 +269,20 @@ function recordSpreadSample(symbol, spreadPct) {
 
 function getSpreadStats() {
   const stats = {};
+  const feeRoundTrip = CONFIG.FEE_PCT * 2;
   for (const [symbol, hist] of Object.entries(state.spreadHistory)) {
     if (!hist.length) continue;
     const spreads = hist.map(h => h.spreadPct);
     const avg = spreads.reduce((a, b) => a + b, 0) / spreads.length;
     const max = Math.max(...spreads);
-    const aboveThreshold = spreads.filter(s => s >= CONFIG.MIN_SPREAD_PCT).length;
+    // On compare l'écart NET (après frais aller-retour) au seuil configuré —
+    // c'est ce que le bot utilise réellement pour décider d'entrer ou non.
+    const aboveThreshold = spreads.filter(s => (s - feeRoundTrip) >= CONFIG.MIN_SPREAD_PCT).length;
     stats[symbol] = {
       samples: hist.length,
       avgSpreadPct: avg,
       maxSpreadPct: max,
+      avgNetSpreadPct: avg - feeRoundTrip,
       pctAboveThreshold: (aboveThreshold / hist.length) * 100,
       oldestSampleAgeH: (Date.now() - hist[0].ts) / 3600000,
     };
@@ -315,16 +329,22 @@ async function evaluateEntry() {
     const pricePrice = Math.max(p1, p2);
     const spreadPct  = ((pricePrice - cheapPrice) / cheapPrice) * 100;
 
-    recordSpreadSample(symbol, spreadPct);
+    recordSpreadSample(symbol, spreadPct); // on garde l'écart brut dans l'historique — plus parlant pour comparer les paires
 
-    if (spreadPct < CONFIG.MIN_SPREAD_PCT) continue; // filtre rapide avant de vérifier la profondeur (économise des appels réseau)
+    // Le seuil configuré est un seuil de gain NET, cohérent avec la sortie
+    // (qui exige elle aussi un gain net ≥ seuil). On déduit donc les frais
+    // d'achat+vente (2×FEE_PCT) avant de comparer — sinon un seuil bas comme
+    // 0.1% ferait entrer le bot sur des écarts qui sont déjà perdants une
+    // fois les frais payés.
+    const netSpreadPct = spreadPct - CONFIG.FEE_PCT * 2;
+    if (netSpreadPct < CONFIG.MIN_SPREAD_PCT) continue; // filtre rapide avant de vérifier la profondeur (économise des appels réseau)
 
-    if (!best || spreadPct > best.spreadPct) {
-      best = { symbol, cheaper, pricier, cheapPrice, pricePrice, spreadPct };
+    if (!best || netSpreadPct > best.netSpreadPct) {
+      best = { symbol, cheaper, pricier, cheapPrice, pricePrice, spreadPct, netSpreadPct };
     }
   }
 
-  if (!best) return; // aucune paire de la watchlist n'a un écart suffisant ce cycle
+  if (!best) return; // aucune paire de la watchlist n'a un écart net suffisant ce cycle
 
   const { symbol, cheaper, pricier, cheapPrice } = best;
   const capital = capitalFor(cheaper);
@@ -339,10 +359,11 @@ async function evaluateEntry() {
   ]);
   const realBuyPrice  = effBuyPrice  || cheapPrice;
   const realSellPrice = effSellPrice || best.pricePrice;
-  const effectiveSpreadPct = ((realSellPrice - realBuyPrice) / realBuyPrice) * 100;
+  const effectiveSpreadPct    = ((realSellPrice - realBuyPrice) / realBuyPrice) * 100;
+  const effectiveNetSpreadPct = effectiveSpreadPct - CONFIG.FEE_PCT * 2;
 
-  if (effectiveSpreadPct < CONFIG.MIN_SPREAD_PCT) {
-    console.log(`⚠ ${symbol}: écart affiché +${best.spreadPct.toFixed(2)}% mais +${effectiveSpreadPct.toFixed(2)}% une fois la profondeur du carnet prise en compte — carnet trop fin, on n'entre pas`);
+  if (effectiveNetSpreadPct < CONFIG.MIN_SPREAD_PCT) {
+    console.log(`⚠ ${symbol}: écart net affiché +${best.netSpreadPct.toFixed(2)}% mais +${effectiveNetSpreadPct.toFixed(2)}% net une fois la profondeur du carnet prise en compte — carnet trop fin, on n'entre pas`);
     return;
   }
 
@@ -352,7 +373,11 @@ async function evaluateEntry() {
     return;
   }
 
-  const usdtAvail = state.balances[cheaper]?.USDT || (CONFIG.DRY_RUN ? capital : 0);
+  // En simulation, on ne dépend JAMAIS du vrai solde (récupéré via les clés
+  // API pour l'affichage) — seul le capital simulé compte, dans un état
+  // totalement séparé (state.simBalances).
+  initSimBalancesIfNeeded();
+  const usdtAvail = CONFIG.DRY_RUN ? state.simBalances[cheaper].USDT : (state.balances[cheaper]?.USDT || 0);
   if (usdtAvail < capital) {
     console.log(`💰 Fonds insuffisants sur ${cheaper}: ${usdtAvail.toFixed(2)} USDT dispo, ${capital} requis`);
     if (shouldAlertFunds()) {
@@ -365,7 +390,7 @@ async function evaluateEntry() {
   state.activeTrade = true;
 
   try {
-    console.log(`🎯 Entrée: achat ${symbol} sur ${cheaper} @ ${fmtPrice(cheapPrice)} (écart affiché +${best.spreadPct.toFixed(2)}%, réel +${effectiveSpreadPct.toFixed(2)}%)`);
+    console.log(`🎯 Entrée: achat ${symbol} sur ${cheaper} @ ${fmtPrice(cheapPrice)} (net affiché +${best.netSpreadPct.toFixed(2)}%, net réel +${effectiveNetSpreadPct.toFixed(2)}%)`);
     const order = await placeMarketOrder(cheaper, symbol, 'buy', amount);
     const filled     = order.filled  || amount;
     const entryPrice = order.average || (order.cost && order.filled ? order.cost / order.filled : cheapPrice);
@@ -382,16 +407,15 @@ async function evaluateEntry() {
 
     if (CONFIG.DRY_RUN) {
       const base = symbol.split('/')[0];
-      if (!state.balances[cheaper]) state.balances[cheaper] = { USDT: capital, free: {} };
-      state.balances[cheaper].USDT -= filled * entryPrice;
-      state.balances[cheaper].free[base] = (state.balances[cheaper].free[base] || 0) + filled;
+      state.simBalances[cheaper].USDT -= filled * entryPrice;
+      state.simBalances[cheaper].free[base] = (state.simBalances[cheaper].free[base] || 0) + filled;
     }
 
     await tg(`🟢 *POSITION OUVERTE*
 
 💎 *Paire :* \`${symbol}\` _(sélectionnée parmi ${CONFIG.WATCHLIST.length} paires surveillées)_
 🏦 *Achat sur :* \`${cheaper}\`
-📈 *Écart détecté :* +${best.spreadPct.toFixed(2)}% (affiché) · +${effectiveSpreadPct.toFixed(2)}% (réel, profondeur du carnet vérifiée)
+📈 *Écart brut :* +${best.spreadPct.toFixed(2)}% · *Net après frais :* +${best.netSpreadPct.toFixed(2)}% (affiché) · +${effectiveNetSpreadPct.toFixed(2)}% (réel, profondeur du carnet vérifiée)
 💵 *Prix d'entrée :* $${fmtPrice(entryPrice)}
 📦 *Quantité :* ${filled.toFixed(6)}
 💰 *Coût :* ${(filled*entryPrice).toFixed(4)} USDT
@@ -481,9 +505,10 @@ async function sellPosition(reasonCode = 'manuel') {
 
     if (CONFIG.DRY_RUN) {
       const base = symbol.split('/')[0];
-      if (state.balances[pos.exchange]) {
-        state.balances[pos.exchange].free[base] = Math.max(0, (state.balances[pos.exchange].free[base] || 0) - filled);
-        state.balances[pos.exchange].USDT += filled * exitPrice;
+      initSimBalancesIfNeeded();
+      if (state.simBalances[pos.exchange]) {
+        state.simBalances[pos.exchange].free[base] = Math.max(0, (state.simBalances[pos.exchange].free[base] || 0) - filled);
+        state.simBalances[pos.exchange].USDT += filled * exitPrice;
       }
     }
 
@@ -586,7 +611,13 @@ async function start(dynamicConfig = {}) {
     state.failedTrades  = 0;
     state.tradeHistory  = [];
     state.position       = dynamicConfig.resetPosition !== false ? null : state.position;
+    state.simBalances    = {}; // repart avec le capital simulé fraîchement configuré
     console.log('🔄 Compteurs remis à zéro pour cette nouvelle session');
+  } else if (dynamicConfig.position) {
+    // Redémarrage automatique (après reboot serveur) : restaure la position
+    // qui était ouverte avant l'arrêt, si elle a été sauvegardée.
+    state.position = dynamicConfig.position;
+    console.log(`🔄 Position restaurée depuis la config sauvegardée : ${state.position.exchange} — ${state.position.quantity} ${state.position.symbol}`);
   }
 
   if (!dynamicConfig.exchange1 || !dynamicConfig.exchange2) {
@@ -624,6 +655,8 @@ async function start(dynamicConfig = {}) {
     throw new Error('Mode Production : des clés API valides sont requises pour les deux exchanges');
   }
 
+  initSimBalancesIfNeeded();
+
   state.running = true;
 
   console.log('\n🤖 ArbiScan Trade Bot démarré');
@@ -654,9 +687,10 @@ async function start(dynamicConfig = {}) {
 💵 *Capital ${ex1Label} :* ${CONFIG.CAPITAL_1} USDT
 💵 *Capital ${ex2Label} :* ${CONFIG.CAPITAL_2} USDT
 
-*Balances USDT :*
+*Balances USDT réelles (info) :*
 ${ex1Label} : \`${ex1USDT.toFixed(2)}\`
 ${ex2Label} : \`${ex2USDT.toFixed(2)}\`
+${CONFIG.DRY_RUN ? '\n_🧪 En simulation, le bot utilise le capital configuré ci-dessus, indépendamment de ce solde réel._' : ''}
 
 _Dépose uniquement de l'USDT — le bot achète le token lui-même quand une opportunité apparaît, et revend au bon moment. Scan toutes les ${CONFIG.SCAN_INTERVAL/1000}s._`);
 
@@ -709,7 +743,10 @@ async function getState() {
     successTrades: state.successTrades,
     failedTrades:  state.failedTrades,
     totalPnL:      state.totalPnL,
-    balances:      state.balances,
+    // En simulation, on affiche les soldes SIMULÉS (indépendants des vrais)
+    // plutôt que les vrais soldes du compte — sinon un capital simulé plus
+    // grand que le vrai solde donnait l'impression que le bot "manquait de fonds".
+    balances:      CONFIG.DRY_RUN ? state.simBalances : state.balances,
     position:      positionInfo,
     tradeHistory:  state.tradeHistory,
     config: {
