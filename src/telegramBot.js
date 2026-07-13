@@ -380,12 +380,42 @@ async function setupWebhook(appUrl) {
   } catch(e) {
     console.error('[TG Commander] ❌ Webhook erreur:', e.message);
   }
+
+  // Vérifie immédiatement ce que Telegram a réellement enregistré — utile
+  // pour détecter un APP_URL incorrect (cause la plus fréquente de commandes
+  // qui ne répondent jamais alors que les alertes sortantes fonctionnent).
+  const info = await getWebhookInfo();
+  if (info) {
+    console.log(`[TG Commander] 🔎 Webhook Telegram réel : ${info.url || '(aucune URL enregistrée !)'}`);
+    if (info.last_error_message) {
+      console.error(`[TG Commander] ⚠️ Dernière erreur Telegram : ${info.last_error_message} (${info.last_error_date ? new Date(info.last_error_date*1000).toLocaleString('fr') : ''})`);
+    }
+    if (info.pending_update_count > 0) {
+      console.warn(`[TG Commander] ⚠️ ${info.pending_update_count} mise(s) à jour en attente non livrée(s)`);
+    }
+  }
+}
+
+// Interroge Telegram pour savoir où le webhook est réellement enregistré,
+// et s'il y a des erreurs de livraison récentes. Accessible aussi via
+// GET /api/webhook-info sur le serveur (ne dépend pas du webhook lui-même,
+// donc fonctionne même si le webhook est cassé).
+async function getWebhookInfo() {
+  if (!TOKEN) return null;
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${TOKEN}/getWebhookInfo`);
+    const d = await r.json();
+    return d.ok ? d.result : { error: d.description };
+  } catch (e) {
+    return { error: e.message };
+  }
 }
 
 module.exports = {
   handleCommand,
   processUpdate,
   setupWebhook,
+  getWebhookInfo,
   startKeepAlive,
   stopKeepAlive,
   isKeepAliveActive,

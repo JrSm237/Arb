@@ -256,8 +256,17 @@ app.get('/api/bot/keepalive', (req, res) => {
 
 // ── WEBHOOK TELEGRAM — COMMANDES BOT ─────────────────────────────────────────
 app.post('/telegram-webhook', async (req, res) => {
+  console.log('[Webhook] 📩 Requête reçue de Telegram:', req.body?.message?.text || '(pas de texte)');
   res.sendStatus(200);
   await tgCommander.processUpdate(req.body, tradeBot, loadBotConfig, saveBotConfig);
+});
+
+// GET /api/webhook-info — diagnostic : montre ce que Telegram a RÉELLEMENT
+// enregistré comme URL de webhook, et les erreurs de livraison. Ne dépend
+// pas du webhook lui-même — utile même si /telegram-webhook ne reçoit rien.
+app.get('/api/webhook-info', async (req, res) => {
+  const info = await tgCommander.getWebhookInfo();
+  res.json(info);
 });
 
 // ── GESTIONNAIRE D'ERREURS GLOBAL ─────────────────────────────────────────────
