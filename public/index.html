@@ -524,7 +524,10 @@ async function loadBotStatus() {
       const p = d.position;
       const exName = BOT_EXCHANGES[p.exchange]?.name || p.exchange?.toUpperCase();
       posBar.style.display = 'block';
-      posBar.innerHTML = `🟢 <strong style="color:var(--green)">Position ouverte</strong> sur ${exName} — ${p.quantity.toLocaleString('fr',{maximumFractionDigits:6})} ${base||''} achetés à $${fmtPrice(p.entryPrice)} · ouverte depuis ${Math.round((Date.now()-p.entryTime)/60000)} min`;
+      const gainTxt = p.netGainPct != null
+        ? ` · <strong style="color:${p.netGainPct>=0?'var(--green)':'var(--orange)'}">${p.netGainPct>=0?'+':''}${p.netGainPct.toFixed(2)}% net</strong> (objectif: +${(cfg.minSpreadPct||2).toFixed(1)}%, stop: -${(cfg.stopLossPct||5).toFixed(1)}%)`
+        : '';
+      posBar.innerHTML = `🟢 <strong style="color:var(--green)">Position ouverte</strong> sur ${exName} — ${p.quantity.toLocaleString('fr',{maximumFractionDigits:6})} ${base||''} achetés à $${fmtPrice(p.entryPrice)} · ouverte depuis ${Math.round((Date.now()-p.entryTime)/60000)} min${gainTxt}`;
     } else {
       posBar.style.display = 'none';
     }
