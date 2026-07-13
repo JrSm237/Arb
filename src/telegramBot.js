@@ -12,7 +12,7 @@ require('dotenv').config();
 
 const TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID?.toString();
-const APP_URL = process.env.APP_URL || 'https://arbiscan-f4fk.onrender.com';
+const APP_URL = (process.env.APP_URL || 'https://arbiscan-f4fk.onrender.com').replace(/\/+$/, '');
 
 // Intervalle de keep-alive (13 minutes = 780 secondes)
 const KEEPALIVE_INTERVAL = 13 * 60 * 1000;
@@ -77,6 +77,7 @@ async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
 /stop\\_bot — Arrêter le bot
 /status — État du bot + PnL + balances + position
 /close\\_position — Clôturer la position en cours maintenant
+/reset\\_position — Effacer le suivi si tu as déjà vendu toi-même (ne vend rien)
 /rapport — Rapport complet
 
 ⚙️ *Configuration à chaud*
@@ -301,9 +302,26 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
     await send(chatId, `⏳ Clôture manuelle de la position sur \`${state.position.exchange}\`...`);
     const result = await tradeBot.sellPosition('manuel');
     if (!result.ok) {
-      await send(chatId, `❌ Échec de la clôture : ${result.reason}`);
+      await send(chatId, `❌ Échec de la clôture : ${result.reason}\n\n_Si tu as déjà vendu manuellement sur l'exchange, utilise /reset\\_position pour débloquer le bot sans repasser d'ordre._`);
     }
     // Le message de confirmation détaillé est déjà envoyé par sellPosition() elle-même
+    return;
+  }
+
+  // ── /reset_position ───────────────────────────────────────────────────────
+  // À utiliser uniquement si tu as DÉJÀ vendu manuellement sur l'exchange —
+  // ça efface juste le suivi interne du bot, sans passer de nouvel ordre.
+  if (text === '/reset_position') {
+    const cleared = tradeBot.clearPosition();
+    if (!cleared) {
+      await send(chatId, 'ℹ️ Aucune position à effacer — le bot n\'en suivait aucune.');
+      return;
+    }
+    await send(chatId, `✅ *Suivi de position effacé*
+
+Le bot ne suit plus de position sur \`${cleared.exchange}\` (${cleared.quantity.toFixed(6)} unités enregistrées).
+
+⚠️ Ceci n'a *rien vendu* — utilise cette commande uniquement si tu as déjà vendu toi-même sur l'exchange. Le bot va maintenant chercher une nouvelle opportunité d'entrée.`);
     return;
   }
 
@@ -364,6 +382,7 @@ async function setupWebhook(appUrl) {
     console.log('[TG Commander] TELEGRAM_BOT_TOKEN non configuré — webhook désactivé');
     return;
   }
+  appUrl = (appUrl || '').replace(/\/+$/, ''); // évite un double slash type ".com//telegram-webhook"
   const webhookUrl = `${appUrl}/telegram-webhook`;
   try {
     const r = await fetch(`https://api.telegram.org/bot${TOKEN}/setWebhook`, {

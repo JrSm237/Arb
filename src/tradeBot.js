@@ -331,7 +331,25 @@ async function sellPosition(reasonCode = 'manuel') {
 
   const netGainPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100 - CONFIG.FEE_PCT * 2;
 
-  const minCheck = orderMeetsMinimum(pos.exchange, symbol, pos.quantity, currentPrice);
+  // Le solde réel peut être légèrement inférieur à pos.quantity si l'exchange
+  // prélève ses frais directement dans le token acheté (fréquent). On vérifie
+  // le solde disponible juste avant de vendre plutôt que de faire confiance
+  // aveuglément à la quantité enregistrée à l'achat — sinon l'ordre de vente
+  // est rejeté ("Insufficient balance") et la position reste bloquée ouverte.
+  let sellAmount = pos.quantity;
+  if (!CONFIG.DRY_RUN) {
+    await fetchBalances();
+    const base = symbol.split('/')[0];
+    const available = state.balances[pos.exchange]?.free?.[base] || 0;
+    if (available > 0 && available < pos.quantity) {
+      console.log(`⚠ Solde réel (${available.toFixed(6)}) < quantité enregistrée (${pos.quantity.toFixed(6)}) — vente ajustée au solde réel`);
+      sellAmount = available * 0.999; // petite marge pour l'arrondi/précision de l'exchange
+    } else if (available === 0) {
+      return { ok: false, reason: `Solde ${base} introuvable sur ${pos.exchange} — vérifie manuellement le compte` };
+    }
+  }
+
+  const minCheck = orderMeetsMinimum(pos.exchange, symbol, sellAmount, currentPrice);
   if (!minCheck.ok) return { ok: false, reason: minCheck.reason };
 
   state.activeTrade = true;
@@ -339,8 +357,8 @@ async function sellPosition(reasonCode = 'manuel') {
     const stopLoss = reasonCode === 'stop-loss';
     console.log(`${stopLoss ? '🛑' : '🎯'} Sortie (${reasonCode}): vente sur ${pos.exchange} @ ${fmtPrice(currentPrice)} (${netGainPct>=0?'+':''}${netGainPct.toFixed(2)}%)`);
 
-    const order = await placeMarketOrder(pos.exchange, symbol, 'sell', pos.quantity);
-    const filled   = order.filled  || pos.quantity;
+    const order = await placeMarketOrder(pos.exchange, symbol, 'sell', sellAmount);
+    const filled   = order.filled  || sellAmount;
     const exitPrice = order.average || (order.cost && order.filled ? order.cost / order.filled : currentPrice);
 
     const feeCost = pos.entryCost * (CONFIG.FEE_PCT / 100) * 2;
@@ -631,4 +649,11 @@ function getConfig() {
   };
 }
 
-module.exports = { start, stop, getState, sendWeeklyReport, fetchBalances, sellPosition, updateConfig, getConfig };
+// ── EFFACER LE SUIVI DE POSITION SANS VENDRE (récupération après une vente manuelle) ──
+function clearPosition() {
+  const had = state.position;
+  state.position = null;
+  return had;
+}
+
+module.exports = { start, stop, getState, sendWeeklyReport, fetchBalances, sellPosition, clearPosition, updateConfig, getConfig };

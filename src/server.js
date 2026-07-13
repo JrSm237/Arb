@@ -10,7 +10,7 @@ const tgCommander = require('./telegramBot');
 
 const app  = express();
 const PORT    = process.env.PORT || 3000;
-const APP_URL = process.env.APP_URL || 'https://arbiscan-f4fk.onrender.com';
+const APP_URL = (process.env.APP_URL || 'https://arbiscan-f4fk.onrender.com').replace(/\/+$/, '');
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
 // ── FILETS DE SÉCURITÉ GLOBAUX ────────────────────────────────────────────────
