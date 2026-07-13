@@ -43,6 +43,17 @@ function isAuthorized(chatId) {
   return chatId?.toString() === CHAT_ID;
 }
 
+// Fusionne un changement de config live (via Telegram) dans bot_config.json,
+// pour qu'il survive à un redémarrage automatique du serveur.
+function persistLiveConfig(loadBotConfig, saveBotConfig, changes) {
+  try {
+    const current = loadBotConfig() || {};
+    saveBotConfig({ ...current, ...changes, autoRestart: true });
+  } catch (e) {
+    console.error('[TG Commander] Échec sauvegarde config live:', e.message);
+  }
+}
+
 // ── TRAITEMENT DES COMMANDES ──────────────────────────────────────────────────
 async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
   const chatId = msg.chat?.id?.toString();
@@ -64,8 +75,17 @@ async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
 ⬡ *Bot de trading*
 /start\\_bot — Relancer le bot (dernière config)
 /stop\\_bot — Arrêter le bot
-/status — État du bot + PnL + balances
+/status — État du bot + PnL + balances + position
+/close\\_position — Clôturer la position en cours maintenant
 /rapport — Rapport complet
+
+⚙️ *Configuration à chaud*
+/config — Voir la configuration actuelle
+/spread \\<valeur\\> — Écart minimum, ex: \`/spread 2.5\`
+/stoploss \\<valeur\\> — Stop-loss, ex: \`/stoploss 5\`
+/capital \\<c1\\> \\<c2\\> — Capital par exchange, ex: \`/capital 10 15\`
+/pair \\<SYMBOL\\> — Changer de paire, ex: \`/pair BTC/USDT\`
+/mode sim|prod — Basculer Simulation/Production
 
 🔧 *Serveur*
 /ping — Vérifier que le serveur tourne
@@ -105,22 +125,25 @@ async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
 
   // ── /status ────────────────────────────────────────────────────────────────
   if (text === '/status') {
-    const state = tradeBot.getState();
+    const state = await tradeBot.getState();
     const cfg   = state.config || {};
     const bals  = state.balances || {};
-    const ex1   = cfg.exchange1 || cfg.EXCHANGE_1 || 'okx';
-    const ex2   = cfg.exchange2 || cfg.EXCHANGE_2 || 'htx';
+    const ex1   = cfg.exchange1 || 'okx';
+    const ex2   = cfg.exchange2 || 'htx';
 
     const pnlColor = state.totalPnL >= 0 ? '🟢' : '🔴';
+    const posLine = state.position
+      ? `\n🟢 *Position ouverte* sur \`${state.position.exchange}\` — ${state.position.quantity.toFixed(6)} unités @ $${state.position.entryPrice}${state.position.netGainPct != null ? ` (${state.position.netGainPct>=0?'+':''}${state.position.netGainPct.toFixed(2)}% net)` : ''}\n`
+      : '\n⚪ Aucune position ouverte\n';
 
     await send(chatId, `📊 *Statut ArbiScan Bot*
 
 🤖 *État :* ${state.running ? '🟢 Actif' : '🔴 Arrêté'}
-💎 *Paire :* \`${cfg.selectedPair || cfg.SELECTED_PAIR || '—'}\`
+💎 *Paire :* \`${cfg.selectedPair || '—'}\`
 🏦 *Exchanges :* \`${ex1.toUpperCase()} ↔ ${ex2.toUpperCase()}\`
-🎯 *Mode :* ${cfg.DRY_RUN ? '🧪 Simulation' : '💰 Production'}
-📈 *Spread min :* ${cfg.MIN_SPREAD_PCT || 2}%
-
+🎯 *Mode :* ${cfg.dryRun ? '🧪 Simulation' : '💰 Production'}
+📈 *Écart min :* ${cfg.minSpreadPct || 2}% · 🛑 *Stop-loss :* ${cfg.stopLossPct || 5}%
+${posLine}
 💰 *PnL Total :* ${pnlColor} \`${(state.totalPnL||0).toFixed(4)} USDT\`
 ✅ *Trades réussis :* ${state.successTrades || 0}
 ❌ *Trades échoués :* ${state.failedTrades  || 0}
@@ -135,7 +158,7 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
 
   // ── /start_bot ─────────────────────────────────────────────────────────────
   if (text === '/start_bot') {
-    if (tradeBot.getState().running) {
+    if ((await tradeBot.getState()).running) {
       await send(chatId, '⚠️ Le bot est déjà en cours d\'exécution. Utilisez /status pour voir son état.');
       return;
     }
@@ -165,6 +188,123 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
   if (text === '/rapport') {
     await tradeBot.sendWeeklyReport();
     return; // Le rapport est envoyé par sendWeeklyReport directement
+  }
+
+  // ── /config ────────────────────────────────────────────────────────────────
+  if (text === '/config') {
+    const cfg = tradeBot.getConfig();
+    await send(chatId, `⚙️ *Configuration actuelle*
+
+🏦 *Exchanges :* \`${cfg.exchange1?.toUpperCase() || '—'} ↔ ${cfg.exchange2?.toUpperCase() || '—'}\`
+💎 *Paire :* \`${cfg.pair || '—'}\`
+💵 *Capital :* ${cfg.capital1} / ${cfg.capital2} USDT
+📈 *Écart min :* ${cfg.minSpreadPct}%
+🛑 *Stop-loss :* ${cfg.stopLossPct}%
+🎯 *Mode :* ${cfg.dryRun ? '🧪 Simulation' : '💰 Production'}
+
+*Pour modifier :*
+/spread \\<valeur\\> — écart minimum (%)
+/stoploss \\<valeur\\> — stop-loss (%)
+/capital \\<c1\\> \\<c2\\> — capital par exchange
+/pair \\<SYMBOL\\> — ex: BTC/USDT
+/mode sim|prod — changer de mode
+/close\\_position — clôturer la position en cours`);
+    return;
+  }
+
+  // ── /spread <valeur> ──────────────────────────────────────────────────────
+  if (text.startsWith('/spread')) {
+    const val = parseFloat(text.split(' ')[1]);
+    if (isNaN(val) || val <= 0) {
+      await send(chatId, '⚠️ Usage : `/spread 2.5` (valeur en %)');
+      return;
+    }
+    const applied = tradeBot.updateConfig({ minSpreadPct: val });
+    persistLiveConfig(loadBotConfig, saveBotConfig, { minSpreadPct: applied.minSpreadPct });
+    await send(chatId, `✅ Écart minimum mis à jour : *${applied.minSpreadPct}%*`);
+    return;
+  }
+
+  // ── /stoploss <valeur> ────────────────────────────────────────────────────
+  if (text.startsWith('/stoploss')) {
+    const val = parseFloat(text.split(' ')[1]);
+    if (isNaN(val) || val <= 0) {
+      await send(chatId, '⚠️ Usage : `/stoploss 5` (valeur en %)');
+      return;
+    }
+    const applied = tradeBot.updateConfig({ stopLossPct: val });
+    persistLiveConfig(loadBotConfig, saveBotConfig, { stopLossPct: applied.stopLossPct });
+    await send(chatId, `✅ Stop-loss mis à jour : *-${applied.stopLossPct}%*`);
+    return;
+  }
+
+  // ── /capital <c1> <c2> ────────────────────────────────────────────────────
+  if (text.startsWith('/capital')) {
+    const parts = text.split(' ');
+    const c1 = parseFloat(parts[1]), c2 = parseFloat(parts[2]);
+    if (isNaN(c1) || isNaN(c2) || c1 <= 0 || c2 <= 0) {
+      await send(chatId, '⚠️ Usage : `/capital 10 10` (montant USDT par exchange)');
+      return;
+    }
+    const applied = tradeBot.updateConfig({ capital1: c1, capital2: c2 });
+    persistLiveConfig(loadBotConfig, saveBotConfig, { capital1: applied.capital1, capital2: applied.capital2 });
+    await send(chatId, `✅ Capital mis à jour : *${applied.capital1} / ${applied.capital2} USDT*\n\n_S'applique à la prochaine entrée en position — pas d'effet sur une position déjà ouverte._`);
+    return;
+  }
+
+  // ── /pair <SYMBOL> ────────────────────────────────────────────────────────
+  if (text.startsWith('/pair')) {
+    const sym = (msg.text.split(' ')[1] || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]+\/USDT$/.test(sym)) {
+      await send(chatId, '⚠️ Usage : `/pair BTC/USDT` (doit finir par /USDT)');
+      return;
+    }
+    const state = await tradeBot.getState();
+    if (state.position) {
+      await send(chatId, `⚠️ Impossible de changer de paire : une position est ouverte sur \`${state.position.symbol}\`. Utilisez /close\\_position d'abord.`);
+      return;
+    }
+    const applied = tradeBot.updateConfig({ pair: sym });
+    persistLiveConfig(loadBotConfig, saveBotConfig, { pair: applied.pair });
+    await send(chatId, `✅ Paire mise à jour : *${applied.pair}*`);
+    return;
+  }
+
+  // ── /mode sim|prod ────────────────────────────────────────────────────────
+  if (text.startsWith('/mode')) {
+    const arg = text.split(' ')[1];
+    if (arg !== 'sim' && arg !== 'prod') {
+      await send(chatId, '⚠️ Usage : `/mode sim` ou `/mode prod`');
+      return;
+    }
+    const state = await tradeBot.getState();
+    if (state.position) {
+      await send(chatId, `⚠️ Impossible de changer de mode : une position est ouverte. Utilisez /close\\_position d'abord.`);
+      return;
+    }
+    const dryRun = arg === 'sim';
+    const applied = tradeBot.updateConfig({ dryRun });
+    persistLiveConfig(loadBotConfig, saveBotConfig, { dryRun: applied.dryRun });
+    await send(chatId, dryRun
+      ? `✅ Mode *Simulation* activé — plus aucun ordre réel ne sera passé.`
+      : `⚠️✅ Mode *Production* activé — le bot va maintenant passer de VRAIS ordres avec de l'argent réel.`);
+    return;
+  }
+
+  // ── /close_position ───────────────────────────────────────────────────────
+  if (text === '/close_position') {
+    const state = await tradeBot.getState();
+    if (!state.position) {
+      await send(chatId, 'ℹ️ Aucune position ouverte actuellement.');
+      return;
+    }
+    await send(chatId, `⏳ Clôture manuelle de la position sur \`${state.position.exchange}\`...`);
+    const result = await tradeBot.sellPosition('manuel');
+    if (!result.ok) {
+      await send(chatId, `❌ Échec de la clôture : ${result.reason}`);
+    }
+    // Le message de confirmation détaillé est déjà envoyé par sellPosition() elle-même
+    return;
   }
 
   // Commande non reconnue

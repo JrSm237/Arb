@@ -315,18 +315,29 @@ async function evaluateExit(symbol) {
 
   if (!takeProfit && !stopLoss) return; // on garde la position, rien à faire ce cycle
 
+  await sellPosition(stopLoss ? 'stop-loss' : 'take-profit');
+}
+
+// ── VENDRE LA POSITION EN COURS (déclenché auto par evaluateExit, ou manuellement) ──
+async function sellPosition(reasonCode = 'manuel') {
+  const pos = state.position;
+  if (!pos) return { ok: false, reason: 'Aucune position ouverte' };
+  if (state.activeTrade) return { ok: false, reason: 'Un ordre est déjà en cours' };
+
+  const symbol = pos.symbol;
+  const ticker = await fetchTicker(pos.exchange, symbol);
+  const currentPrice = ticker?.bid || ticker?.last;
+  if (!currentPrice) return { ok: false, reason: 'Impossible de récupérer le prix actuel' };
+
+  const netGainPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100 - CONFIG.FEE_PCT * 2;
+
   const minCheck = orderMeetsMinimum(pos.exchange, symbol, pos.quantity, currentPrice);
-  if (!minCheck.ok) {
-    console.log(`⚠ Impossible de sortir, ordre trop petit: ${minCheck.reason} — on continue de surveiller`);
-    return;
-  }
+  if (!minCheck.ok) return { ok: false, reason: minCheck.reason };
 
-  if (state.activeTrade) return;
   state.activeTrade = true;
-
   try {
-    const reason = stopLoss ? 'STOP-LOSS' : 'PRISE DE PROFIT';
-    console.log(`${stopLoss ? '🛑' : '🎯'} Sortie (${reason}): vente sur ${pos.exchange} @ ${fmtPrice(currentPrice)} (${netGainPct>=0?'+':''}${netGainPct.toFixed(2)}%)`);
+    const stopLoss = reasonCode === 'stop-loss';
+    console.log(`${stopLoss ? '🛑' : '🎯'} Sortie (${reasonCode}): vente sur ${pos.exchange} @ ${fmtPrice(currentPrice)} (${netGainPct>=0?'+':''}${netGainPct.toFixed(2)}%)`);
 
     const order = await placeMarketOrder(pos.exchange, symbol, 'sell', pos.quantity);
     const filled   = order.filled  || pos.quantity;
@@ -353,14 +364,20 @@ async function evaluateExit(symbol) {
       duration: Date.now() - pos.entryTime,
       timestamp: new Date().toISOString(),
       status: 'success',
-      exitReason: stopLoss ? 'stop-loss' : 'take-profit',
+      exitReason: reasonCode,
     };
     state.tradeHistory.unshift(trade);
     if (state.tradeHistory.length > 100) state.tradeHistory.pop();
 
     state.position = null;
 
-    await tg(`${stopLoss ? '🛑 *STOP-LOSS DÉCLENCHÉ*' : '✅ *POSITION CLÔTURÉE — PROFIT*'}
+    const titleMap = {
+      'stop-loss':   '🛑 *STOP-LOSS DÉCLENCHÉ*',
+      'take-profit': '✅ *POSITION CLÔTURÉE — PROFIT*',
+      'manuel':      '✋ *POSITION CLÔTURÉE MANUELLEMENT*',
+    };
+
+    await tg(`${titleMap[reasonCode] || titleMap.manuel}
 
 💎 *Paire :* \`${symbol}\`
 🏦 *Exchange :* \`${pos.exchange}\`
@@ -371,9 +388,12 @@ async function evaluateExit(symbol) {
 ⏱ *Durée détention :* ${Math.round((Date.now()-pos.entryTime)/60000)} min
 📋 *Trades :* ${state.successTrades}✅ / ${state.failedTrades}❌`);
 
+    return { ok: true, pnl: realPnL };
+
   } catch (e) {
     console.error('Sortie échouée:', e.message);
     await tg(`⚠️ *Échec de sortie de position*\n\n\`${symbol}\` sur \`${pos.exchange}\`\nErreur: ${e.message}\n\n_La position reste ouverte, nouvelle tentative au prochain scan._`);
+    return { ok: false, reason: e.message };
   } finally {
     state.activeTrade = null;
     fetchBalances().catch(() => {});
@@ -534,7 +554,20 @@ function stop() {
   tg('⏹ *Bot ArbiScan arrêté manuellement*' + (state.position ? `\n\n⚠️ Une position reste ouverte sur \`${state.position.exchange}\` (${state.position.quantity.toFixed(6)} unités) — elle ne sera pas vendue automatiquement tant que le bot est arrêté.` : ''));
 }
 
-function getState() {
+async function getState() {
+  let positionInfo = state.position;
+  if (state.position) {
+    try {
+      const ticker = await fetchTicker(state.position.exchange, state.position.symbol);
+      const currentPrice = ticker?.bid || ticker?.last || null;
+      if (currentPrice) {
+        const grossGainPct = ((currentPrice - state.position.entryPrice) / state.position.entryPrice) * 100;
+        const netGainPct   = grossGainPct - CONFIG.FEE_PCT * 2;
+        positionInfo = { ...state.position, currentPrice, netGainPct };
+      }
+    } catch { /* si le fetch échoue, on renvoie la position sans le gain live */ }
+  }
+
   return {
     running:       state.running,
     totalTrades:   state.totalTrades,
@@ -542,7 +575,7 @@ function getState() {
     failedTrades:  state.failedTrades,
     totalPnL:      state.totalPnL,
     balances:      state.balances,
-    position:      state.position,
+    position:      positionInfo,
     tradeHistory:  state.tradeHistory,
     config: {
       exchange1:    CONFIG.EXCHANGE_1,
@@ -558,4 +591,44 @@ function getState() {
   };
 }
 
-module.exports = { start, stop, getState, sendWeeklyReport, fetchBalances };
+// ── MODIFIER LA CONFIG À CHAUD (sans redémarrer le bot) ──────────────────────
+// Utilisé par les commandes Telegram /spread, /stoploss, /capital, /pair, /mode
+function updateConfig(partial = {}) {
+  const applied = {};
+  if (partial.minSpreadPct != null && !isNaN(partial.minSpreadPct)) {
+    CONFIG.MIN_SPREAD_PCT = parseFloat(partial.minSpreadPct);
+    applied.minSpreadPct = CONFIG.MIN_SPREAD_PCT;
+  }
+  if (partial.stopLossPct != null && !isNaN(partial.stopLossPct)) {
+    CONFIG.STOP_LOSS_PCT = parseFloat(partial.stopLossPct);
+    applied.stopLossPct = CONFIG.STOP_LOSS_PCT;
+  }
+  if (partial.capital1 != null && !isNaN(partial.capital1)) {
+    CONFIG.CAPITAL_1 = parseFloat(partial.capital1);
+    applied.capital1 = CONFIG.CAPITAL_1;
+  }
+  if (partial.capital2 != null && !isNaN(partial.capital2)) {
+    CONFIG.CAPITAL_2 = parseFloat(partial.capital2);
+    applied.capital2 = CONFIG.CAPITAL_2;
+  }
+  if (partial.pair) {
+    CONFIG.SELECTED_PAIR = partial.pair.toUpperCase();
+    applied.pair = CONFIG.SELECTED_PAIR;
+  }
+  if (partial.dryRun != null) {
+    CONFIG.DRY_RUN = !!partial.dryRun;
+    applied.dryRun = CONFIG.DRY_RUN;
+  }
+  return applied;
+}
+
+function getConfig() {
+  return {
+    exchange1: CONFIG.EXCHANGE_1, exchange2: CONFIG.EXCHANGE_2,
+    capital1: CONFIG.CAPITAL_1, capital2: CONFIG.CAPITAL_2,
+    minSpreadPct: CONFIG.MIN_SPREAD_PCT, stopLossPct: CONFIG.STOP_LOSS_PCT,
+    dryRun: CONFIG.DRY_RUN, pair: CONFIG.SELECTED_PAIR,
+  };
+}
+
+module.exports = { start, stop, getState, sendWeeklyReport, fetchBalances, sellPosition, updateConfig, getConfig };

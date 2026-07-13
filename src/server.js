@@ -120,8 +120,8 @@ app.get('/api/exchanges', (req, res) => {
 });
 
 // GET /api/bot/status — état du bot (public : lecture seule, aucune donnée sensible)
-app.get('/api/bot/status', (req, res) => {
-  res.json(tradeBot.getState());
+app.get('/api/bot/status', async (req, res) => {
+  res.json(await tradeBot.getState());
 });
 
 // POST /api/bot/test-connections — tester des clés API avant de démarrer le bot
@@ -210,8 +210,8 @@ app.post('/api/bot/stop', requireAdminKey, (req, res) => {
 });
 
 // GET /api/bot/trades — historique des trades
-app.get('/api/bot/trades', (req, res) => {
-  const state = tradeBot.getState();
+app.get('/api/bot/trades', async (req, res) => {
+  const state = await tradeBot.getState();
   res.json({
     trades:        state.tradeHistory,
     totalTrades:   state.totalTrades,
