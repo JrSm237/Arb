@@ -571,14 +571,14 @@ function renderSpreadHistory(stats, threshold) {
   }
   entries.sort((a,b) => b[1].avgSpreadPct - a[1].avgSpreadPct);
   el.innerHTML = entries.map(([symbol, s]) => {
-    const good = s.avgSpreadPct >= threshold;
+    const good = s.avgNetSpreadPct >= threshold;
     return `<div style="background:var(--card);border:1px solid ${good?'rgba(0,245,160,.25)':'var(--border)'};border-radius:7px;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
       <div>
         <div style="font-family:var(--mono);font-weight:700;font-size:.84rem">${symbol}</div>
         <div style="font-family:var(--mono);font-size:.63rem;color:var(--muted)">${s.samples} échantillons · ${s.oldestSampleAgeH.toFixed(1)}h de données</div>
       </div>
       <div style="text-align:right">
-        <div style="font-family:var(--mono);font-weight:700;font-size:.86rem;color:${good?'var(--green)':'var(--text)'}">moy ${s.avgSpreadPct.toFixed(2)}% · max ${s.maxSpreadPct.toFixed(2)}%</div>
+        <div style="font-family:var(--mono);font-weight:700;font-size:.86rem;color:${good?'var(--green)':'var(--text)'}">brut ${s.avgSpreadPct.toFixed(2)}% · net ${s.avgNetSpreadPct>=0?'+':''}${s.avgNetSpreadPct.toFixed(2)}% · max ${s.maxSpreadPct.toFixed(2)}%</div>
         <div style="font-family:var(--mono);font-size:.63rem;color:var(--muted)">${s.pctAboveThreshold.toFixed(0)}% du temps ≥ seuil</div>
       </div>
     </div>`;
