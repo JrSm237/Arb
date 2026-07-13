@@ -61,12 +61,16 @@ Configuration entièrement depuis le site, en 3 étapes :
 1. **Choisir 2 exchanges** parmi 4 disponibles (Bybit, MEXC, HTX, KuCoin)
 2. **Entrer les clés API** de ces 2 exchanges + tester la connexion (solde affiché) — protégé par
    la clé admin (`ADMIN_KEY`)
-3. **Choisir la paire, le capital par exchange, le spread minimum, le mode** (Simulation 🧪 ou
-   Production 💰) puis démarrer
+3. **Choisir la paire, le capital par exchange, l'écart minimum, le stop-loss, le mode**
+   (Simulation 🧪 ou Production 💰) puis démarrer
 
-Le bot achète sur l'exchange le moins cher et vend simultanément sur l'exchange le plus cher dès
-qu'un spread net dépasse le seuil configuré. La configuration est sauvegardée côté serveur :
-si le serveur redémarre, le bot repart automatiquement avec la même config.
+**Stratégie** : dépose uniquement de l'**USDT** sur les deux exchanges — pas besoin de préparer
+les deux actifs à l'avance. Le bot achète lui-même le token quand un exchange devient nettement
+moins cher que l'autre (écart ≥ seuil configuré), puis revend sur ce **même** exchange dès que le
+gain net atteint ce seuil, ou coupe la position si elle perd plus que le stop-loss configuré. Un
+seul ordre à la fois est jamais envoyé — pas de risque d'exécution partielle entre deux exchanges.
+La configuration est sauvegardée côté serveur : si le serveur redémarre, le bot repart
+automatiquement avec la même config (position ouverte comprise).
 
 ⚠️ **Sécurité** : crée tes clés API avec uniquement les droits **Read + Trade**, jamais
 **Withdraw (Retrait)**.
