@@ -173,12 +173,22 @@ footer{padding:16px 24px;border-top:1px solid var(--border);font-size:.67rem;col
         </div>
 
         <div>
-          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Écart minimum (achat / prise de profit)</div>
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Écart minimum (pour ACHETER)</div>
           <div style="display:flex;align-items:center;gap:8px">
-            <input type="range" id="botSpread" min="0.5" max="10" step="0.1" value="2.0"
+            <input type="range" id="botSpread" min="0.1" max="10" step="0.1" value="2.0"
               oninput="document.getElementById('botSpreadVal').textContent=parseFloat(this.value).toFixed(1)+'%'"
               style="flex:1;accent-color:var(--green);cursor:pointer">
             <span id="botSpreadVal" style="font-family:var(--mono);font-size:.84rem;color:var(--green);font-weight:700;min-width:42px">2.0%</span>
+          </div>
+        </div>
+
+        <div>
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">🎯 Take-profit (pour VENDRE)</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="range" id="botTakeProfit" min="0.1" max="10" step="0.1" value="2.0"
+              oninput="document.getElementById('botTakeProfitVal').textContent=parseFloat(this.value).toFixed(1)+'%'"
+              style="flex:1;accent-color:var(--blue);cursor:pointer">
+            <span id="botTakeProfitVal" style="font-family:var(--mono);font-size:.84rem;color:var(--blue);font-weight:700;min-width:42px">2.0%</span>
           </div>
         </div>
 
@@ -469,6 +479,7 @@ async function botLaunch() {
   const cap1   =parseFloat(document.getElementById('botCap1')?.value)||10;
   const cap2   =parseFloat(document.getElementById('botCap2')?.value)||10;
   const spread =parseFloat(document.getElementById('botSpread')?.value)||2.0;
+  const takeProfitPct = parseFloat(document.getElementById('botTakeProfit')?.value)||2.0;
   const dryRun =document.getElementById('botDryRun')?.value==='true';
   const stopLossPct = parseFloat(document.getElementById('botStopLoss')?.value)||5.0;
   const msgEl  =document.getElementById('botLaunchMsg');
@@ -478,7 +489,7 @@ async function botLaunch() {
   msgEl.style.color='var(--muted)'; msgEl.textContent=`⏳ Démarrage sur ${watchlist.length} paire(s)…`;
   try {
     const r=await fetch('/api/bot/start',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({adminKey,watchlist,exchange1:botSelExchanges[0],exchange2:botSelExchanges[1],apiConfigs:botConnAPIs,capital1:cap1,capital2:cap2,minSpreadPct:spread,stopLossPct,dryRun})});
+      body:JSON.stringify({adminKey,watchlist,exchange1:botSelExchanges[0],exchange2:botSelExchanges[1],apiConfigs:botConnAPIs,capital1:cap1,capital2:cap2,minSpreadPct:spread,takeProfitPct,stopLossPct,dryRun})});
     const d=await r.json();
     msgEl.style.color=d.success?'var(--green)':'var(--orange)'; msgEl.textContent=d.message||d.error;
     if(d.success) setTimeout(loadBotStatus,2000);
@@ -547,7 +558,7 @@ async function loadBotStatus() {
       const exName = BOT_EXCHANGES[p.exchange]?.name || p.exchange?.toUpperCase();
       posBar.style.display = 'block';
       const gainTxt = p.netGainPct != null
-        ? ` · <strong style="color:${p.netGainPct>=0?'var(--green)':'var(--orange)'}">${p.netGainPct>=0?'+':''}${p.netGainPct.toFixed(2)}% net</strong> (objectif: +${(cfg.minSpreadPct||2).toFixed(1)}%, stop: -${(cfg.stopLossPct||5).toFixed(1)}%)`
+        ? ` · <strong style="color:${p.netGainPct>=0?'var(--green)':'var(--orange)'}">${p.netGainPct>=0?'+':''}${p.netGainPct.toFixed(2)}% net</strong> (objectif: +${(cfg.takeProfitPct||2).toFixed(1)}%, stop: -${(cfg.stopLossPct||5).toFixed(1)}%)`
         : '';
       posBar.innerHTML = `🟢 <strong style="color:var(--green)">Position ouverte</strong> sur ${exName} — ${p.quantity.toLocaleString('fr',{maximumFractionDigits:6})} ${base||''} (${p.symbol}) achetés à $${fmtPrice(p.entryPrice)} · ouverte depuis ${Math.round((Date.now()-p.entryTime)/60000)} min${gainTxt}`;
     } else {
