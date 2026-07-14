@@ -15,7 +15,8 @@ const TELEGRAM_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const CONFIG = {
-  MIN_SPREAD_PCT: parseFloat(process.env.MIN_SPREAD_PCT || '2.0'), // seuil pour ACHETER (écart entre exchanges) ET pour VENDRE (gain net visé)
+  MIN_SPREAD_PCT: parseFloat(process.env.MIN_SPREAD_PCT || '2.0'),  // écart net minimum requis pour ACHETER
+  TAKE_PROFIT_PCT: parseFloat(process.env.TAKE_PROFIT_PCT || '2.0'), // gain net requis pour VENDRE (indépendant du seuil d'entrée)
   STOP_LOSS_PCT:  parseFloat(process.env.STOP_LOSS_PCT  || '5.0'), // coupe la position si elle perd plus que ça
   WATCHLIST:      ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT'], // paires surveillées pour l'entrée
   EXCHANGE_1:     null,   // ex: 'kucoin' — choisi dynamiquement depuis le site
@@ -347,7 +348,28 @@ async function evaluateEntry() {
   if (!best) return; // aucune paire de la watchlist n'a un écart net suffisant ce cycle
 
   const { symbol, cheaper, pricier, cheapPrice } = best;
-  const capital = capitalFor(cheaper);
+  const targetCapital = capitalFor(cheaper);
+
+  // En simulation, on ne dépend JAMAIS du vrai solde (récupéré via les clés
+  // API pour l'affichage) — seul le capital simulé compte, dans un état
+  // totalement séparé (state.simBalances).
+  initSimBalancesIfNeeded();
+  const usdtAvail = CONFIG.DRY_RUN ? state.simBalances[cheaper].USDT : (state.balances[cheaper]?.USDT || 0);
+
+  // On utilise ce qui est réellement disponible, plafonné au capital
+  // configuré — pas besoin d'exiger le montant exact. Après une perte, le
+  // solde peut être légèrement inférieur au capital visé (ex: 98$ au lieu de
+  // 100$) : ça reste largement suffisant pour retrader, pas la peine de
+  // bloquer pour quelques dollars manquants.
+  const FLOOR_USDT = 1; // en dessous, inutile d'essayer (dust, l'exchange rejettera de toute façon)
+  if (usdtAvail < FLOOR_USDT) {
+    console.log(`💰 Fonds quasi épuisés sur ${cheaper}: ${usdtAvail.toFixed(2)} USDT dispo`);
+    if (shouldAlertFunds()) {
+      await tg(`💰 *Fonds quasi épuisés*\n\n\`${cheaper}\` n'a plus que ${usdtAvail.toFixed(2)} USDT.\nRecharge cet exchange en USDT pour que le bot puisse continuer.`);
+    }
+    return;
+  }
+  const capital = Math.min(targetCapital, usdtAvail);
   const amount  = capital / cheapPrice;
 
   // ── VÉRIFICATION DE PROFONDEUR ──────────────────────────────────────────────
@@ -373,24 +395,11 @@ async function evaluateEntry() {
     return;
   }
 
-  // En simulation, on ne dépend JAMAIS du vrai solde (récupéré via les clés
-  // API pour l'affichage) — seul le capital simulé compte, dans un état
-  // totalement séparé (state.simBalances).
-  initSimBalancesIfNeeded();
-  const usdtAvail = CONFIG.DRY_RUN ? state.simBalances[cheaper].USDT : (state.balances[cheaper]?.USDT || 0);
-  if (usdtAvail < capital) {
-    console.log(`💰 Fonds insuffisants sur ${cheaper}: ${usdtAvail.toFixed(2)} USDT dispo, ${capital} requis`);
-    if (shouldAlertFunds()) {
-      await tg(`💰 *Fonds insuffisants*\n\n\`${cheaper}\` n'a que ${usdtAvail.toFixed(2)} USDT (besoin de ${capital}).\nRecharge cet exchange en USDT pour que le bot puisse continuer.`);
-    }
-    return;
-  }
-
   if (state.activeTrade) return;
   state.activeTrade = true;
 
   try {
-    console.log(`🎯 Entrée: achat ${symbol} sur ${cheaper} @ ${fmtPrice(cheapPrice)} (net affiché +${best.netSpreadPct.toFixed(2)}%, net réel +${effectiveNetSpreadPct.toFixed(2)}%)`);
+    console.log(`🎯 Entrée: achat ${symbol} sur ${cheaper} @ ${fmtPrice(cheapPrice)} (net affiché +${best.netSpreadPct.toFixed(2)}%, net réel +${effectiveNetSpreadPct.toFixed(2)}%)${capital < targetCapital ? ` — capital réduit à ${capital.toFixed(2)} USDT (solde dispo)` : ''}`);
     const order = await placeMarketOrder(cheaper, symbol, 'buy', amount);
     const filled     = order.filled  || amount;
     const entryPrice = order.average || (order.cost && order.filled ? order.cost / order.filled : cheapPrice);
@@ -418,9 +427,9 @@ async function evaluateEntry() {
 📈 *Écart brut :* +${best.spreadPct.toFixed(2)}% · *Net après frais :* +${best.netSpreadPct.toFixed(2)}% (affiché) · +${effectiveNetSpreadPct.toFixed(2)}% (réel, profondeur du carnet vérifiée)
 💵 *Prix d'entrée :* $${fmtPrice(entryPrice)}
 📦 *Quantité :* ${filled.toFixed(6)}
-💰 *Coût :* ${(filled*entryPrice).toFixed(4)} USDT
+💰 *Coût :* ${(filled*entryPrice).toFixed(4)} USDT${capital < targetCapital ? ` _(réduit, solde dispo)_` : ''}
 
-_Le bot revendra sur ${cheaper} dès un gain net de +${CONFIG.MIN_SPREAD_PCT}%, ou coupera la position à -${CONFIG.STOP_LOSS_PCT}% (stop-loss)._`);
+_Le bot revendra sur ${cheaper} dès un gain net de +${CONFIG.TAKE_PROFIT_PCT}%, ou coupera la position à -${CONFIG.STOP_LOSS_PCT}% (stop-loss)._`);
 
   } catch (e) {
     state.failedTrades++;
@@ -446,7 +455,7 @@ async function evaluateExit(symbol) {
   const grossGainPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
   const netGainPct   = grossGainPct - CONFIG.FEE_PCT * 2; // frais achat + vente
 
-  const takeProfit = netGainPct >= CONFIG.MIN_SPREAD_PCT;
+  const takeProfit = netGainPct >= CONFIG.TAKE_PROFIT_PCT;
   const stopLoss    = netGainPct <= -CONFIG.STOP_LOSS_PCT;
 
   if (!takeProfit && !stopLoss) return; // on garde la position, rien à faire ce cycle
@@ -629,6 +638,7 @@ async function start(dynamicConfig = {}) {
   CONFIG.CAPITAL_1      = dynamicConfig.capital1 != null ? parseFloat(dynamicConfig.capital1) : CONFIG.CAPITAL_1;
   CONFIG.CAPITAL_2      = dynamicConfig.capital2 != null ? parseFloat(dynamicConfig.capital2) : CONFIG.CAPITAL_2;
   CONFIG.MIN_SPREAD_PCT = dynamicConfig.minSpreadPct != null ? parseFloat(dynamicConfig.minSpreadPct) : CONFIG.MIN_SPREAD_PCT;
+  CONFIG.TAKE_PROFIT_PCT = dynamicConfig.takeProfitPct != null ? parseFloat(dynamicConfig.takeProfitPct) : CONFIG.TAKE_PROFIT_PCT;
   CONFIG.STOP_LOSS_PCT  = dynamicConfig.stopLossPct  != null ? parseFloat(dynamicConfig.stopLossPct)  : CONFIG.STOP_LOSS_PCT;
   CONFIG.DRY_RUN        = dynamicConfig.dryRun !== undefined ? !!dynamicConfig.dryRun : CONFIG.DRY_RUN;
   // Accepte soit une liste (dynamicConfig.watchlist = ['BTC/USDT', ...]) soit
@@ -662,7 +672,8 @@ async function start(dynamicConfig = {}) {
   console.log('\n🤖 ArbiScan Trade Bot démarré');
   console.log(`   Exchanges    : ${CONFIG.EXCHANGE_1.toUpperCase()} + ${CONFIG.EXCHANGE_2.toUpperCase()}`);
   console.log(`   Paires       : ${CONFIG.WATCHLIST.join(', ')}`);
-  console.log(`   Spread min   : ${CONFIG.MIN_SPREAD_PCT}%`);
+  console.log(`   Écart entrée : ${CONFIG.MIN_SPREAD_PCT}%`);
+  console.log(`   Take-profit  : +${CONFIG.TAKE_PROFIT_PCT}%`);
   console.log(`   Stop-loss    : -${CONFIG.STOP_LOSS_PCT}%`);
   console.log(`   Capital ${CONFIG.EXCHANGE_1.toUpperCase()}  : ${CONFIG.CAPITAL_1} USDT`);
   console.log(`   Capital ${CONFIG.EXCHANGE_2.toUpperCase()}  : ${CONFIG.CAPITAL_2} USDT`);
@@ -681,8 +692,8 @@ async function start(dynamicConfig = {}) {
 🤖 *Mode :* ${CONFIG.DRY_RUN ? '🧪 Simulation' : '💰 Production'}
 💎 *Paires surveillées :* ${CONFIG.WATCHLIST.join(', ')}
 🏦 *Exchanges :* ${ex1Label} ↔ ${ex2Label}
-📈 *Entrée si écart ≥ :* ${CONFIG.MIN_SPREAD_PCT}%
-🎯 *Sortie si gain net ≥ :* ${CONFIG.MIN_SPREAD_PCT}%
+📈 *Entrée si écart net ≥ :* ${CONFIG.MIN_SPREAD_PCT}%
+🎯 *Sortie si gain net ≥ :* ${CONFIG.TAKE_PROFIT_PCT}%
 🛑 *Stop-loss si perte ≥ :* ${CONFIG.STOP_LOSS_PCT}%
 💵 *Capital ${ex1Label} :* ${CONFIG.CAPITAL_1} USDT
 💵 *Capital ${ex2Label} :* ${CONFIG.CAPITAL_2} USDT
@@ -755,6 +766,7 @@ async function getState() {
       capital1:     CONFIG.CAPITAL_1,
       capital2:     CONFIG.CAPITAL_2,
       minSpreadPct: CONFIG.MIN_SPREAD_PCT,
+      takeProfitPct: CONFIG.TAKE_PROFIT_PCT,
       stopLossPct:  CONFIG.STOP_LOSS_PCT,
       dryRun:       CONFIG.DRY_RUN,
       watchlist:    CONFIG.WATCHLIST,
@@ -771,6 +783,10 @@ function updateConfig(partial = {}) {
   if (partial.minSpreadPct != null && !isNaN(partial.minSpreadPct)) {
     CONFIG.MIN_SPREAD_PCT = parseFloat(partial.minSpreadPct);
     applied.minSpreadPct = CONFIG.MIN_SPREAD_PCT;
+  }
+  if (partial.takeProfitPct != null && !isNaN(partial.takeProfitPct)) {
+    CONFIG.TAKE_PROFIT_PCT = parseFloat(partial.takeProfitPct);
+    applied.takeProfitPct = CONFIG.TAKE_PROFIT_PCT;
   }
   if (partial.stopLossPct != null && !isNaN(partial.stopLossPct)) {
     CONFIG.STOP_LOSS_PCT = parseFloat(partial.stopLossPct);
@@ -802,7 +818,7 @@ function getConfig() {
   return {
     exchange1: CONFIG.EXCHANGE_1, exchange2: CONFIG.EXCHANGE_2,
     capital1: CONFIG.CAPITAL_1, capital2: CONFIG.CAPITAL_2,
-    minSpreadPct: CONFIG.MIN_SPREAD_PCT, stopLossPct: CONFIG.STOP_LOSS_PCT,
+    minSpreadPct: CONFIG.MIN_SPREAD_PCT, takeProfitPct: CONFIG.TAKE_PROFIT_PCT, stopLossPct: CONFIG.STOP_LOSS_PCT,
     dryRun: CONFIG.DRY_RUN, watchlist: CONFIG.WATCHLIST,
   };
 }

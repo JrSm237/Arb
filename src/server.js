@@ -31,7 +31,7 @@ const EXCHANGE_IDS = ['bybit', 'mexc', 'htx', 'kucoin'];
 // ── PERSISTANCE CONFIG BOT ────────────────────────────────────────────────────
 const BOT_CONFIG_FILE = path.join(__dirname, '..', 'bot_config.json');
 
-function saveBotConfig(config) {
+function saveBotConfig(config, silent = false) {
   try {
     const toSave = {
       watchlist:    config.watchlist || (config.pair ? [config.pair] : undefined),
@@ -40,6 +40,7 @@ function saveBotConfig(config) {
       capital1:     config.capital1,
       capital2:     config.capital2,
       minSpreadPct: config.minSpreadPct,
+      takeProfitPct: config.takeProfitPct,
       stopLossPct:  config.stopLossPct,
       dryRun:       config.dryRun,
       position:     config.position || null, // position ouverte au moment de la sauvegarde, pour la restaurer après un redémarrage
@@ -50,19 +51,19 @@ function saveBotConfig(config) {
       autoRestart: true,
     };
     fs.writeFileSync(BOT_CONFIG_FILE, JSON.stringify(toSave, null, 2));
-    console.log('💾 Config bot sauvegardée');
+    if (!silent) console.log('💾 Config bot sauvegardée');
   } catch(e) {
     console.error('Erreur sauvegarde config bot:', e.message);
   }
 }
 
-function loadBotConfig() {
+function loadBotConfig(silent = false) {
   try {
     if (!fs.existsSync(BOT_CONFIG_FILE)) return null;
     const raw = fs.readFileSync(BOT_CONFIG_FILE, 'utf8');
     const cfg = JSON.parse(raw);
     if (cfg.apiConfigs) cfg.apiConfigs = decodeAPIs(cfg.apiConfigs);
-    console.log('📂 Config bot restaurée:', (cfg.watchlist||[]).join(','), cfg.exchange1, '↔', cfg.exchange2);
+    if (!silent) console.log('📂 Config bot restaurée:', (cfg.watchlist||[]).join(','), cfg.exchange1, '↔', cfg.exchange2);
     return cfg;
   } catch(e) {
     console.error('Erreur chargement config bot:', e.message);
@@ -172,7 +173,7 @@ app.post('/api/bot/test-connections', requireAdminKey, async (req, res) => {
 
 // POST /api/bot/start — démarrer le bot avec config dynamique (2 exchanges au choix parmi 4)
 app.post('/api/bot/start', requireAdminKey, async (req, res) => {
-  const { pair, watchlist, exchange1, exchange2, apiConfigs, capital1, capital2, minSpreadPct, stopLossPct, dryRun } = req.body;
+  const { pair, watchlist, exchange1, exchange2, apiConfigs, capital1, capital2, minSpreadPct, takeProfitPct, stopLossPct, dryRun } = req.body;
 
   if (!exchange1 || !exchange2) {
     return res.status(400).json({ error: 'Sélectionnez deux exchanges (exchange1, exchange2)' });
@@ -190,6 +191,7 @@ app.post('/api/bot/start', requireAdminKey, async (req, res) => {
     capital1:     parseFloat(capital1) || 10,
     capital2:     parseFloat(capital2) || 10,
     minSpreadPct: parseFloat(minSpreadPct) || 2.0,
+    takeProfitPct: parseFloat(takeProfitPct) || parseFloat(minSpreadPct) || 2.0,
     stopLossPct:  parseFloat(stopLossPct)  || 5.0,
     dryRun:       dryRun === true || dryRun === 'true',
   };
@@ -200,7 +202,7 @@ app.post('/api/bot/start', requireAdminKey, async (req, res) => {
     const modeLabel = config.dryRun ? '🧪 Simulation' : '💰 Production';
     res.json({
       success: true,
-      message: `✅ Bot démarré — ${modeLabel} | ${finalWatchlist.length} paire(s) surveillée(s) | ${exchange1.toUpperCase()}: ${config.capital1} USDT | ${exchange2.toUpperCase()}: ${config.capital2} USDT | Spread min: ${config.minSpreadPct}%`
+      message: `✅ Bot démarré — ${modeLabel} | ${finalWatchlist.length} paire(s) surveillée(s) | ${exchange1.toUpperCase()}: ${config.capital1} USDT | ${exchange2.toUpperCase()}: ${config.capital2} USDT | Entrée: ${config.minSpreadPct}% | Take-profit: ${config.takeProfitPct}%`
     });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -333,11 +335,18 @@ _Le bot continue de fonctionner en arrière-plan._`);
     try {
       const st = await tradeBot.getState();
       if (!st.running) return;
-      const current = loadBotConfig();
+      const current = loadBotConfig(true); // silencieux — simple vérification périodique, pas un vrai "restore"
       if (!current) return;
-      const posChanged = JSON.stringify(current.position || null) !== JSON.stringify(st.position || null);
+      // getState() enrichit la position avec le prix en direct (currentPrice,
+      // netGainPct) à chaque appel — on l'ignore pour la comparaison, sinon
+      // ça déclenche une "sauvegarde" à chaque cycle même sans vrai changement.
+      const stablePos = st.position
+        ? { exchange: st.position.exchange, quantity: st.position.quantity, entryPrice: st.position.entryPrice, entryCost: st.position.entryCost, entryTime: st.position.entryTime, symbol: st.position.symbol }
+        : null;
+      const posChanged = JSON.stringify(current.position || null) !== JSON.stringify(stablePos);
       if (posChanged) {
-        saveBotConfig({ ...current, position: st.position || null });
+        saveBotConfig({ ...current, position: stablePos }, true);
+        console.log('💾 Position mise à jour dans la config sauvegardée');
       }
     } catch (e) { console.error('Persist position error:', e.message); }
   }, 20000);

@@ -82,7 +82,8 @@ async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
 
 ⚙️ *Configuration à chaud*
 /config — Voir la configuration actuelle
-/spread \\<valeur\\> — Écart minimum, ex: \`/spread 2.5\`
+/spread \\<valeur\\> — Écart minimum pour ACHETER, ex: \`/spread 2.5\`
+/takeprofit \\<valeur\\> — Gain net requis pour VENDRE, ex: \`/takeprofit 1.5\`
 /stoploss \\<valeur\\> — Stop-loss, ex: \`/stoploss 5\`
 /capital \\<c1\\> \\<c2\\> — Capital par exchange, ex: \`/capital 10 15\`
 /watchlist \\<paires\\> — Paires surveillées, ex: \`/watchlist BTC/USDT,ETH/USDT,SOL/USDT\`
@@ -144,7 +145,7 @@ async function handleCommand(msg, tradeBot, loadBotConfig, saveBotConfig) {
 💎 *Paires :* \`${(cfg.watchlist||[]).join(', ') || '—'}\`
 🏦 *Exchanges :* \`${ex1.toUpperCase()} ↔ ${ex2.toUpperCase()}\`
 🎯 *Mode :* ${cfg.dryRun ? '🧪 Simulation' : '💰 Production'}
-📈 *Écart min :* ${cfg.minSpreadPct || 2}% · 🛑 *Stop-loss :* ${cfg.stopLossPct || 5}%
+📈 *Entrée :* ${cfg.minSpreadPct || 2}% · 🎯 *Take-profit :* ${cfg.takeProfitPct || 2}% · 🛑 *Stop-loss :* ${cfg.stopLossPct || 5}%
 ${posLine}
 💰 *PnL Total :* ${pnlColor} \`${(state.totalPnL||0).toFixed(4)} USDT\`
 ✅ *Trades réussis :* ${state.successTrades || 0}
@@ -200,7 +201,8 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
 🏦 *Exchanges :* \`${cfg.exchange1?.toUpperCase() || '—'} ↔ ${cfg.exchange2?.toUpperCase() || '—'}\`
 💎 *Paires :* \`${(cfg.watchlist||[]).join(', ') || '—'}\`
 💵 *Capital :* ${cfg.capital1} / ${cfg.capital2} USDT
-📈 *Écart min :* ${cfg.minSpreadPct}%
+📈 *Écart d'entrée :* ${cfg.minSpreadPct}%
+🎯 *Take-profit :* ${cfg.takeProfitPct}%
 🛑 *Stop-loss :* ${cfg.stopLossPct}%
 🎯 *Mode :* ${cfg.dryRun ? '🧪 Simulation' : '💰 Production'}
 
@@ -218,12 +220,25 @@ _Mis à jour : ${new Date().toLocaleString('fr-FR')}_`);
   if (text.startsWith('/spread')) {
     const val = parseFloat(text.split(' ')[1]);
     if (isNaN(val) || val <= 0) {
-      await send(chatId, '⚠️ Usage : `/spread 2.5` (valeur en %)');
+      await send(chatId, '⚠️ Usage : `/spread 2.5` (écart minimum pour ACHETER, en %)');
       return;
     }
     const applied = tradeBot.updateConfig({ minSpreadPct: val });
     persistLiveConfig(loadBotConfig, saveBotConfig, { minSpreadPct: applied.minSpreadPct });
-    await send(chatId, `✅ Écart minimum mis à jour : *${applied.minSpreadPct}%*`);
+    await send(chatId, `✅ Écart d'entrée mis à jour : *${applied.minSpreadPct}%*`);
+    return;
+  }
+
+  // ── /takeprofit <valeur> ──────────────────────────────────────────────────
+  if (text.startsWith('/takeprofit')) {
+    const val = parseFloat(text.split(' ')[1]);
+    if (isNaN(val) || val <= 0) {
+      await send(chatId, '⚠️ Usage : `/takeprofit 1.5` (gain net requis pour VENDRE, en %)');
+      return;
+    }
+    const applied = tradeBot.updateConfig({ takeProfitPct: val });
+    persistLiveConfig(loadBotConfig, saveBotConfig, { takeProfitPct: applied.takeProfitPct });
+    await send(chatId, `✅ Take-profit mis à jour : *+${applied.takeProfitPct}%*`);
     return;
   }
 
