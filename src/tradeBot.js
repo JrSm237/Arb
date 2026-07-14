@@ -201,7 +201,7 @@ function orderMeetsMinimum(exchangeId, symbol, amount, price) {
 }
 
 // ── PLACER UN ORDRE MARKET ────────────────────────────────────────────────────
-async function placeMarketOrder(exchangeId, symbol, side, amount) {
+async function placeMarketOrder(exchangeId, symbol, side, amount, price) {
   if (CONFIG.DRY_RUN) {
     console.log(`[SIM] ${side.toUpperCase()} ${amount.toFixed(6)} ${symbol} on ${exchangeId}`);
     return { id: 'sim-' + Date.now(), status: 'closed', filled: amount, average: null, simulated: true };
@@ -209,7 +209,12 @@ async function placeMarketOrder(exchangeId, symbol, side, amount) {
   const ex = privateExchanges[exchangeId];
   if (!ex) throw new Error(`Pas de clé API configurée pour ${exchangeId}`);
   try {
-    return await ex.createMarketOrder(symbol, side, amount);
+    // Certains exchanges (HTX/Huobi notamment) exigent le prix en plus de la
+    // quantité pour un ordre d'achat au marché, afin de calculer le coût
+    // total (amount × price) — sans ça, ccxt rejette l'ordre avant même de
+    // l'envoyer. On le transmet systématiquement quand on l'a, ça ne gêne
+    // pas les exchanges qui n'en ont pas besoin.
+    return await ex.createMarketOrder(symbol, side, amount, price);
   } catch (e) {
     throw new Error(`Ordre ${side} ${symbol} sur ${exchangeId}: ${e.message}`);
   }
@@ -400,7 +405,7 @@ async function evaluateEntry() {
 
   try {
     console.log(`🎯 Entrée: achat ${symbol} sur ${cheaper} @ ${fmtPrice(cheapPrice)} (net affiché +${best.netSpreadPct.toFixed(2)}%, net réel +${effectiveNetSpreadPct.toFixed(2)}%)${capital < targetCapital ? ` — capital réduit à ${capital.toFixed(2)} USDT (solde dispo)` : ''}`);
-    const order = await placeMarketOrder(cheaper, symbol, 'buy', amount);
+    const order = await placeMarketOrder(cheaper, symbol, 'buy', amount, realBuyPrice);
     const filled     = order.filled  || amount;
     const entryPrice = order.average || (order.cost && order.filled ? order.cost / order.filled : cheapPrice);
 
@@ -502,7 +507,7 @@ async function sellPosition(reasonCode = 'manuel') {
     const stopLoss = reasonCode === 'stop-loss';
     console.log(`${stopLoss ? '🛑' : '🎯'} Sortie (${reasonCode}): vente sur ${pos.exchange} @ ${fmtPrice(currentPrice)} (${netGainPct>=0?'+':''}${netGainPct.toFixed(2)}%)`);
 
-    const order = await placeMarketOrder(pos.exchange, symbol, 'sell', sellAmount);
+    const order = await placeMarketOrder(pos.exchange, symbol, 'sell', sellAmount, currentPrice);
     const filled   = order.filled  || sellAmount;
     const exitPrice = order.average || (order.cost && order.filled ? order.cost / order.filled : currentPrice);
 
